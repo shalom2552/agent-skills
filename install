@@ -19,10 +19,12 @@ readonly DEFAULT_MODE="copy"
 
 readonly SOURCE_HOME="${AGENT_SKILLS_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-skills}"  # links point here, so data not cache
 readonly REPO_URL="${AGENT_SKILLS_REPO:-$CLONE_URL}"
+readonly INSTALLER_ID="$REPO_URL"
 
 # name | source dir (in repo) | destination dir (under root) | entry glob | metadata file (in entry)
 readonly ASSET_TYPES=(
   "skills|skills|skills|*/|SKILL.md"
+  "scripts|scripts|scripts|*.sh|."
 )
 
 TTY_FD=0  # prompts read /dev/tty so they survive curl | bash
@@ -31,10 +33,26 @@ BACKUP=""
 BACKUP_DEST=""
 CURSOR_HIDDEN=0
 MENU_DRAWN=0
-MENU_HEAD=0
 MENU_ROWS=()
 MENU_MARK=()
+MENU_KIND=()
+MENU_OPEN=()
+MENU_OWNER=()
+MENU_SIZE=()
+MENU_PREFIX=()
+MENU_GHELP=()
+MENU_GMARK=()
+MENU_VIS=()
 MENU_INDEX=0
+MENU_TREE=0
+MENU_TOP=0
+MENU_POS=0
+MENU_VIEW=0
+MENU_TOTAL=0
+MENU_MARKED=0
+MENU_NAME=""
+MENU_HELP=""
+TRUNC=""
 PICK=""
 
 cleanup() {
@@ -92,14 +110,22 @@ banner() {
 
 field_line() { printf '  %-8s %s\n' "$1" "$2"; }
 
-truncate_to() {
+# sets TRUNC; the menu redraws on every keystroke, so it must not fork
+trunc() {
   local text="$1" max="$2"
-  (( max < 4 )) && { printf ''; return; }
-  if (( ${#text} > max )); then
-    printf '%s…' "${text:0:max-1}"
+  if (( max < 4 )); then
+    TRUNC=""
+  elif (( ${#text} > max )); then
+    TRUNC="${text:0:max-1}…"
   else
-    printf '%s' "$text"
+    TRUNC="$text"
   fi
+  return 0
+}
+
+truncate_to() {
+  trunc "$1" "$2"
+  printf '%s' "$TRUNC"
 }
 
 status_glyph() {
@@ -112,25 +138,56 @@ status_glyph() {
 }
 
 declare -A COUNTS=()
+declare -A TYPE_COUNTS=()
+EMIT_TYPE=""
+EMIT_TYPES=()
 
 emit() {
   local status="$1" label="$2" detail="${3:-}"
   COUNTS["$status"]=$(( ${COUNTS["$status"]:-0} + 1 ))
+  [[ -n "$EMIT_TYPE" ]] \
+    && TYPE_COUNTS["$EMIT_TYPE|$status"]=$(( ${TYPE_COUNTS["$EMIT_TYPE|$status"]:-0} + 1 ))
   if [[ -z "$detail" ]]; then
-    printf '  %s %s\n' "$(status_glyph "$status")" "$label"
+    printf '    %s %s\n' "$(status_glyph "$status")" "$label"
   else
-    printf '  %s %-*s %s%s%s\n' \
+    printf '    %s %-*s %s%s%s\n' \
       "$(status_glyph "$status")" "$LABEL_WIDTH" "$label" "$C_DIM" "$detail" "$C_RESET"
   fi
 }
 
-summary() {
-  local order=(linked updated copied current blocked) status line=""
-  for status in "${order[@]}"; do
-    (( ${COUNTS["$status"]:-0} )) && line+="${line:+, }${COUNTS[$status]} $status"
+plural() {
+  local n="$1" word="$2"
+  (( n == 1 )) && word="${word%s}"        # type names are plural already
+  printf '%s %s' "$n" "$word"
+}
+
+# "3 skills and 1 script": the types that ended up with this status
+status_line() {
+  local status="$1" t n parts=() out=""
+  for t in "${EMIT_TYPES[@]}"; do
+    n=${TYPE_COUNTS[$t|$status]:-0}
+    (( n )) && parts+=("$(plural "$n" "$t")")
   done
+  (( ${#parts[@]} )) || return 0
+  out="${parts[0]}"
+  for (( n = 1; n < ${#parts[@]}; n++ )); do
+    if (( n == ${#parts[@]} - 1 )); then out+=" and ${parts[n]}"; else out+=", ${parts[n]}"; fi
+  done
+  printf '%s' "$out"
+}
+
+summary() {
+  local order=(linked updated copied current blocked) status total=0 line
   rule
-  log "${line:-nothing to do}"
+  for status in "${order[@]}"; do
+    line="$(status_line "$status")"
+    [[ -n "$line" ]] && printf '  %-8s %s\n' "$status" "$line"
+    total=$(( total + ${COUNTS[$status]:-0} ))
+  done
+  if (( total == 1 )); then note "1 entry total"
+  elif (( total )); then    note "$total entries total"
+  else                      log "nothing to do"
+  fi
   (( ${COUNTS[blocked]:-0} )) && note "blocked entries exist and were not created by install; --force replaces them"
   return 0
 }
@@ -218,18 +275,29 @@ wanted() {
 # a copied directory carries the marker inside; a copied file gets one alongside
 sidecar_marker() { printf '%s/.%s%s' "$(dirname -- "$1")" "$(basename -- "$1")" "$MARKER"; }
 
+marker_ours() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  grep -qxF "repo=$INSTALLER_ID" -- "$path"
+}
+
 owned_by_installer() {
-  local dest="$1"
-  [[ -L "$dest" ]] && return 0
-  [[ -d "$dest" && -e "$dest/$MARKER" ]] && return 0
-  [[ -e "$(sidecar_marker "$dest")" ]] && return 0
+  local dest="$1" target
+  if [[ -L "$dest" ]]; then
+    target="$(readlink -- "$dest")"
+    [[ "$target" == "${REPO_ROOT:-}"/* || "$target" == "$SOURCE_HOME"/* ]] && return 0
+    return 1
+  fi
+  [[ -d "$dest" ]] && marker_ours "$dest/$MARKER" && return 0
+  marker_ours "$(sidecar_marker "$dest")" && return 0
   return 1
 }
 
 write_marker() {
   local target="$1" src="$2" path
   if [[ -d "$target" ]]; then path="$target/$MARKER"; else path="$(sidecar_marker "$target")"; fi
-  printf 'source=%s\ninstalled=%s\n' "$src" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$path"
+  printf 'repo=%s\nsource=%s\ninstalled=%s\n' \
+    "$INSTALLER_ID" "$src" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$path"
 }
 
 drop_dest() {
@@ -390,13 +458,71 @@ read_key() {
       case "$rest" in
         "[A"|"OA") KEY="up" ;;
         "[B"|"OB") KEY="down" ;;
+        "[C"|"OC") KEY="open" ;;
+        "[D"|"OD") KEY="close" ;;
         "")        KEY="quit" ;;
         *)         KEY="other" ;;
       esac ;;
     k)     KEY="up" ;;
     j)     KEY="down" ;;
+    l)     KEY="open" ;;
+    h)     KEY="close" ;;
     q)     KEY="quit" ;;
     *)     KEY="other" ;;
+  esac
+  return 0
+}
+
+# rows are flat by default. a tree sets MENU_KIND to group or child and points
+# each child at its group through MENU_OWNER; children always follow their group.
+menu_reset() {
+  MENU_ROWS=(); MENU_MARK=(); MENU_KIND=(); MENU_OPEN=(); MENU_OWNER=()
+  MENU_SIZE=(); MENU_PREFIX=(); MENU_GHELP=(); MENU_GMARK=()
+  MENU_INDEX=0
+}
+
+menu_visible() {
+  local i
+  MENU_VIS=()
+  for (( i = 0; i < ${#MENU_ROWS[@]}; i++ )); do
+    if [[ "${MENU_KIND[i]:-}" == "child" ]] && (( ! MENU_OPEN[MENU_OWNER[i]] )); then
+      continue
+    fi
+    MENU_VIS+=("$i")
+  done
+  return 0
+}
+
+menu_mark_all() {
+  local value="$1" i
+  for i in "${!MENU_ROWS[@]}"; do
+    [[ "${MENU_KIND[i]:-}" == "child" ]] && MENU_MARK[i]=$value
+  done
+  return 0
+}
+
+# children of a group are contiguous and start right after it
+menu_group_set() {
+  local g="$1" value="$2" i
+  for (( i = g + 1; i <= g + MENU_SIZE[g]; i++ )); do MENU_MARK[i]=$value; done
+  return 0
+}
+
+# sets MENU_NAME and MENU_HELP for one row, with the tree decoration applied
+menu_cells() {
+  local i="$1"
+  MENU_NAME="${MENU_ROWS[i]%%$'\t'*}"
+  MENU_HELP="${MENU_ROWS[i]#*$'\t'}"
+  case "${MENU_KIND[i]:-}" in
+    group)
+      if (( MENU_OPEN[i] )); then
+        MENU_NAME="▾ $MENU_NAME"
+        MENU_HELP="${MENU_GHELP[i]}"
+      else
+        MENU_NAME="▸ $MENU_NAME"
+        MENU_HELP="${MENU_GHELP[i]}, collapsed"
+      fi ;;
+    child) MENU_NAME="${MENU_PREFIX[i]}$MENU_NAME" ;;
   esac
   return 0
 }
@@ -404,11 +530,12 @@ read_key() {
 # one frame per keystroke, written in a single call, so nothing flickers.
 # each frame overwrites the one before it, so menus replace each other in place.
 menu_draw() {
-  local title="$1" multi="$2" count="$3" idx="$4" cols="$5"
-  local namew="$6" helpw="$7" top="$8" view="$9" head="${10}" marked="${11}"
-  local frame="" line hint name help mark tint i foot=""
+  local title="$1" multi="$2" cols="$3" namew="$4" helpw="$5"
+  local frame="" line hint name help mark tint fill i p foot=""
 
-  if (( multi )); then
+  if (( multi && MENU_TREE )); then
+    hint="↑/↓ move, space toggle, →/← fold, enter confirm, q cancel"
+  elif (( multi )); then
     hint="↑/↓ move, space toggle, enter confirm, q cancel"
   else
     hint="↑/↓ move, enter select, q cancel"
@@ -417,53 +544,66 @@ menu_draw() {
   (( MENU_DRAWN )) && frame+=$'\033'"[${MENU_DRAWN}A"
   frame+=$'\033[J'
 
-  printf -v line '  %s%s%s' "$C_BOLD" "$(truncate_to "$title" $(( cols - 2 )))" "$C_RESET"
+  trunc "$title" $(( cols - 2 ))
+  printf -v line '  %s%s%s' "$C_BOLD" "$TRUNC" "$C_RESET"
   frame+="$line"$'\n'
-  printf -v line '  %s%s%s' "$C_DIM" "$(truncate_to "$hint" $(( cols - 2 )))" "$C_RESET"
+  trunc "$hint" $(( cols - 2 ))
+  printf -v line '  %s%s%s' "$C_DIM" "$TRUNC" "$C_RESET"
   frame+="$line"$'\n'
 
-  for (( i = top; i < top + view; i++ )); do
+  for (( p = MENU_TOP; p < MENU_TOP + MENU_VIEW; p++ )); do
+    i=${MENU_VIS[p]}
+    menu_cells "$i"
+    trunc "$MENU_NAME" "$namew"; name="$TRUNC"
     help=""
-    (( helpw >= 8 )) && help="$(truncate_to "${MENU_ROWS[i]#*$'\t'}" "$helpw")"
+    if (( helpw >= 8 )); then trunc "$MENU_HELP" "$helpw"; help="$TRUNC"; fi
+
     mark=""
-    if (( multi )); then
-      if (( head && i == 0 )); then       # the all row is a tri-state box, so it reads as a control
-        if (( marked == count - head )); then
-          mark="${C_DIM}[x]${C_RESET} "
-        elif (( marked )); then
-          mark="${C_DIM}[~]${C_RESET} "
-        else
-          mark="${C_DIM}[ ]${C_RESET} "
+    tint=""
+    if [[ "${MENU_KIND[i]:-}" == "all" ]]; then
+      tint="$C_BOLD"
+      if (( multi )); then
+        if (( MENU_MARKED == MENU_TOTAL )); then mark="${C_GREEN}[x]${C_RESET} "
+        elif (( MENU_MARKED )); then             mark="${C_YELLOW}[~]${C_RESET} "
+        else                                     mark="${C_DIM}[ ]${C_RESET} "
         fi
-      elif (( MENU_MARK[i] )); then
-        mark="${C_GREEN}[x]${C_RESET} "
-      else
-        mark="${C_DIM}[ ]${C_RESET} "
+      fi
+    elif [[ "${MENU_KIND[i]:-}" == "group" ]]; then
+      tint="$C_BOLD"
+      if (( multi )); then
+        if (( MENU_GMARK[i] == MENU_SIZE[i] )); then mark="${C_GREEN}[x]${C_RESET} "
+        elif (( MENU_GMARK[i] )); then               mark="${C_YELLOW}[~]${C_RESET} "
+        else                                         mark="${C_DIM}[ ]${C_RESET} "
+        fi
+      fi
+    elif (( multi )); then
+      if (( MENU_MARK[i] )); then mark="${C_GREEN}[x]${C_RESET} "
+      else                        mark="${C_DIM}[ ]${C_RESET} "
       fi
     fi
-    name="$(truncate_to "${MENU_ROWS[i]%%$'\t'*}" "$namew")"
-    tint=""
-    (( multi && head && i == 0 )) && tint="$C_DIM"
-    if (( i == idx )); then
-      printf -v line '  %s>%s %s%s%s%-*s%s  %s%s%s' \
-        "$C_BLUE" "$C_RESET" "$mark" "$tint" "$C_BOLD" "$namew" "$name" "$C_RESET" "$C_DIM" "$help" "$C_RESET"
+
+    printf -v fill '%*s' $(( namew - ${#name} )) ''   # tree glyphs are multibyte, so %-*s pads short
+    if (( p == MENU_POS )); then
+      printf -v line '  %s>%s %s%s%s%s%s  %s%s%s' \
+        "$C_BLUE" "$C_RESET" "$mark" "${tint:-$C_BOLD}" "$name" "$C_RESET" "$fill" \
+        "$C_DIM" "$help" "$C_RESET"
     else
-      printf -v line '    %s%s%-*s%s  %s%s%s' "$mark" "$tint" "$namew" "$name" "$C_RESET" "$C_DIM" "$help" "$C_RESET"
+      printf -v line '    %s%s%s%s%s  %s%s%s' \
+        "$mark" "$tint" "$name" "$C_RESET" "$fill" "$C_DIM" "$help" "$C_RESET"
     fi
     frame+="$line"$'\n'
   done
 
-  (( multi )) && foot="$marked of $(( count - head )) selected"
-  if (( count > view )); then                       # range counts entries, not the all row
-    local from=$(( top + 1 - head )) to=$(( top + view - head ))
-    (( from < 1 )) && from=1
-    foot+="${foot:+, }showing $from-$to"
+  (( multi )) && foot="$MENU_MARKED of $MENU_TOTAL selected"
+  if (( ${#MENU_VIS[@]} > MENU_VIEW )); then
+    foot+="${foot:+, }showing $(( MENU_TOP + 1 ))-$(( MENU_TOP + MENU_VIEW )) of ${#MENU_VIS[@]}"
   fi
-  printf -v line '  %s%s%s' "$C_DIM" "$(truncate_to "$foot" $(( cols - 2 )))" "$C_RESET"
+  trunc "$foot" $(( cols - 2 ))
+  printf -v line '  %s%s%s' "$C_DIM" "$TRUNC" "$C_RESET"
   frame+="$line"$'\n'
 
   printf '%s' "$frame" >&2
-  MENU_DRAWN=$(( view + 3 ))
+  MENU_DRAWN=$(( MENU_VIEW + 3 ))
 }
 
 menu_clear() {
@@ -473,68 +613,103 @@ menu_clear() {
   return 0
 }
 
-menu_mark_all() {
-  local value="$1" head="$2" count="$3" i
-  for (( i = head; i < count; i++ )); do MENU_MARK[i]=$value; done
-}
-
-# MENU_ROWS holds "name<TAB>help". single sets MENU_INDEX, multi sets MENU_MARK.
-# MENU_HEAD=1 makes row 0 a select-all checkbox. returns 1 if cancelled.
+# MENU_ROWS holds "name<TAB>help". single sets MENU_INDEX, multi sets MENU_MARK
+# on the non-group rows. returns 1 if cancelled.
 menu_run() {
   local title="$1" multi="$2"
-  local count=${#MENU_ROWS[@]} head=${MENU_HEAD:-0}
-  local idx=${MENU_INDEX:-0} top=0 cols rows view namew helpw i name marked=0
+  local cols rows namew helpw i p g cur count
 
-  (( count > head )) || return 1
-  (( idx >= 0 && idx < count )) || idx=0
+  (( ${#MENU_ROWS[@]} )) || return 1
+
+  MENU_TREE=0
+  for i in "${!MENU_ROWS[@]}"; do
+    if [[ "${MENU_KIND[i]:-}" == "group" ]]; then MENU_TREE=1; break; fi
+  done
+
+  cols="$(term_cols)"                    # read once; tput per keystroke is too slow
+  rows="$(term_lines)"
+
+  cur=${MENU_INDEX:-0}
+  (( cur >= 0 && cur < ${#MENU_ROWS[@]} )) || cur=0
+  MENU_TOP=0
   hide_cursor
 
   while true; do
-    if (( multi )); then
-      marked=0
-      for (( i = head; i < count; i++ )); do
-        (( MENU_MARK[i] )) && marked=$(( marked + 1 ))
+    menu_visible
+    count=${#MENU_VIS[@]}
+    (( count )) || { show_cursor; return 1; }
+
+    MENU_POS=-1                          # the cursor row can vanish when a group folds
+    for p in "${!MENU_VIS[@]}"; do
+      if (( MENU_VIS[p] == cur )); then MENU_POS=$p; break; fi
+    done
+    if (( MENU_POS < 0 )); then
+      cur=${MENU_OWNER[cur]:-0}
+      for p in "${!MENU_VIS[@]}"; do
+        if (( MENU_VIS[p] == cur )); then MENU_POS=$p; break; fi
       done
-      (( head )) && MENU_MARK[0]=$(( marked == count - head ))
+      if (( MENU_POS < 0 )); then MENU_POS=0; cur=${MENU_VIS[0]}; fi
     fi
 
-    cols="$(term_cols)"
-    rows="$(term_lines)"
-    view=$(( rows - 6 ))
-    (( view > count )) && view=$count
-    (( view < 1 )) && view=1
+    MENU_TOTAL=0
+    MENU_MARKED=0
+    for i in "${!MENU_ROWS[@]}"; do
+      if [[ "${MENU_KIND[i]:-}" == "group" ]]; then MENU_GMARK[i]=0; continue; fi
+      if [[ "${MENU_KIND[i]:-}" == "all" ]]; then continue; fi
+      MENU_TOTAL=$(( MENU_TOTAL + 1 ))
+      if (( MENU_MARK[i] )); then
+        MENU_MARKED=$(( MENU_MARKED + 1 ))
+        g=${MENU_OWNER[i]:--1}
+        (( g >= 0 )) && MENU_GMARK[g]=$(( MENU_GMARK[g] + 1 ))
+      fi
+    done
 
-    (( idx < top )) && top=$idx
-    (( idx >= top + view )) && top=$(( idx - view + 1 ))
-    (( top > count - view )) && top=$(( count - view ))
-    (( top < 0 )) && top=0
+    MENU_VIEW=$(( rows - 6 ))
+    (( MENU_VIEW > count )) && MENU_VIEW=$count
+    (( MENU_VIEW < 1 )) && MENU_VIEW=1
+
+    (( MENU_POS < MENU_TOP )) && MENU_TOP=$MENU_POS
+    (( MENU_POS >= MENU_TOP + MENU_VIEW )) && MENU_TOP=$(( MENU_POS - MENU_VIEW + 1 ))
+    (( MENU_TOP > count - MENU_VIEW )) && MENU_TOP=$(( count - MENU_VIEW ))
+    (( MENU_TOP < 0 )) && MENU_TOP=0
 
     namew=0
-    for (( i = top; i < top + view; i++ )); do
-      name="${MENU_ROWS[i]%%$'\t'*}"
-      (( ${#name} > namew )) && namew=${#name}
+    for (( p = MENU_TOP; p < MENU_TOP + MENU_VIEW; p++ )); do
+      menu_cells "${MENU_VIS[p]}"
+      if (( ${#MENU_NAME} > namew )); then namew=${#MENU_NAME}; fi
     done
     (( namew > cols / 2 )) && namew=$(( cols / 2 ))
     (( namew < 4 )) && namew=4
     helpw=$(( cols - namew - 12 ))
 
-    menu_draw "$title" "$multi" "$count" "$idx" "$cols" "$namew" "$helpw" "$top" "$view" "$head" "$marked"
+    menu_draw "$title" "$multi" "$cols" "$namew" "$helpw"
 
     read_key
     case "$KEY" in
-      up)    idx=$(( (idx - 1 + count) % count )) ;;
-      down)  idx=$(( (idx + 1) % count )) ;;
+      up)    MENU_POS=$(( (MENU_POS - 1 + count) % count )); cur=${MENU_VIS[MENU_POS]} ;;
+      down)  MENU_POS=$(( (MENU_POS + 1) % count )); cur=${MENU_VIS[MENU_POS]} ;;
+      open)
+        if [[ "${MENU_KIND[cur]:-}" == "group" ]]; then MENU_OPEN[cur]=1; fi ;;
+      close)
+        if [[ "${MENU_KIND[cur]:-}" == "group" ]]; then
+          MENU_OPEN[cur]=0
+        elif [[ "${MENU_KIND[cur]:-}" == "child" ]]; then
+          cur=${MENU_OWNER[cur]}
+          MENU_OPEN[cur]=0
+        fi ;;
       toggle)
         if (( multi )); then
-          if (( head && idx == 0 )); then
-            menu_mark_all $(( ! MENU_MARK[0] )) "$head" "$count"
+          if [[ "${MENU_KIND[cur]:-}" == "all" ]]; then
+            menu_mark_all $(( MENU_MARKED != MENU_TOTAL ))
+          elif [[ "${MENU_KIND[cur]:-}" == "group" ]]; then
+            menu_group_set "$cur" $(( MENU_GMARK[cur] != MENU_SIZE[cur] ))
           else
-            MENU_MARK[idx]=$(( ! MENU_MARK[idx] ))
+            MENU_MARK[cur]=$(( ! MENU_MARK[cur] ))
           fi
         fi ;;
       enter)
-        if (( multi && marked == 0 )); then continue; fi
-        MENU_INDEX=$idx
+        if (( multi && MENU_MARKED == 0 )); then continue; fi
+        MENU_INDEX=$cur
         show_cursor
         return 0 ;;
       quit)  show_cursor; return 1 ;;
@@ -544,9 +719,8 @@ menu_run() {
 
 confirm() {
   local question="$1" default="${2:-yes}"
+  menu_reset
   MENU_ROWS=("yes"$'\t' "no"$'\t')
-  MENU_HEAD=0
-  MENU_INDEX=0
   [[ "$default" == "no" ]] && MENU_INDEX=1
   menu_run "$question" 0 || return 1
   [[ "${MENU_ROWS[$MENU_INDEX]%%$'\t'*}" == "yes" ]]
@@ -556,9 +730,7 @@ confirm() {
 choose() {
   local title="$1" prefix="$2" help_prefix="$3" default="$4"
   local name help help_fn rest=()
-  MENU_ROWS=()
-  MENU_HEAD=0
-  MENU_INDEX=0
+  menu_reset
   while IFS= read -r name; do
     help_fn="${help_prefix}${name}"
     help=""
@@ -574,34 +746,55 @@ choose() {
   PICK="${MENU_ROWS[$MENU_INDEX]%%$'\t'*}"
 }
 
-# ROWS in, chosen subset of ROWS out
+# ROWS in, chosen subset of ROWS out. one group per asset type, and ROWS is
+# already grouped by type, so the child rows line up with ROWS in order.
 pick_entries() {
-  local row type src dest_rel meta entry label desc first="" prefixed=0 i
+  local row type src dest_rel meta entry desc last="" group=0 i n=0 word
   local kept=()
 
-  for row in "${ROWS[@]}"; do
-    unpack_row "$row"
-    [[ -z "$first" ]] && first="$type"
-    [[ "$type" == "$first" ]] || prefixed=1
-  done
+  menu_reset
+  MENU_ROWS+=("all"$'\t'"select or clear everything")
+  MENU_MARK+=(0)
+  MENU_KIND+=(all)
+  MENU_OWNER+=(-1)
+  MENU_PREFIX+=("")
 
-  MENU_HEAD=1
-  MENU_ROWS=("all"$'\t'"select or clear every entry")
-  MENU_MARK=(0)
   for row in "${ROWS[@]}"; do
     unpack_row "$row"
-    label="$entry"
-    (( prefixed )) && label="$type/$entry"
+    if [[ "$type" != "$last" ]]; then
+      last="$type"
+      MENU_ROWS+=("$type"$'\t')
+      MENU_MARK+=(0)
+      MENU_KIND+=(group)
+      MENU_OWNER+=(-1)
+      MENU_PREFIX+=("")
+      group=$(( ${#MENU_ROWS[@]} - 1 ))
+      MENU_OPEN[group]=1
+      MENU_SIZE[group]=0
+    fi
     desc="$(describe_entry "$(meta_path "$src" "$meta")")"
-    MENU_ROWS+=("$label"$'\t'"$desc")
+    MENU_ROWS+=("$entry"$'\t'"$desc")
     MENU_MARK+=(0)
+    MENU_KIND+=(child)
+    MENU_OWNER+=("$group")
+    MENU_PREFIX+=("├─ ")
+    MENU_SIZE[group]=$(( MENU_SIZE[group] + 1 ))
   done
 
-  MENU_INDEX=0
+  for i in "${!MENU_KIND[@]}"; do          # elbow on the last child, count on the group
+    if [[ "${MENU_KIND[i]}" != "group" ]]; then continue; fi
+    MENU_PREFIX[i + MENU_SIZE[i]]="└─ "
+    word=entries
+    (( MENU_SIZE[i] == 1 )) && word=entry
+    MENU_GHELP[i]="${MENU_SIZE[i]} $word"
+  done
+
   menu_run "what to install" 1 || return 1
 
-  for i in "${!ROWS[@]}"; do
-    if (( MENU_MARK[i + 1] )); then kept+=("${ROWS[$i]}"); fi
+  for i in "${!MENU_ROWS[@]}"; do
+    [[ "${MENU_KIND[i]}" == "child" ]] || continue
+    if (( MENU_MARK[i] )); then kept+=("${ROWS[$n]}"); fi
+    n=$(( n + 1 ))
   done
   ROWS=( ${kept[@]+"${kept[@]}"} )
 }
@@ -610,7 +803,7 @@ cancelled() { menu_clear 2; log "cancelled"; exit 0; }
 
 # every question replaces the one before it, and the last one leaves no trace
 wizard() {
-  note "${#ROWS[@]} entries found in $(basename -- "$REPO_ROOT")"
+  note "$(count_types) found in $(basename -- "$REPO_ROOT")"
   printf '\n'
   confirm "continue?" "yes" || cancelled
   if (( ${#FILTERS[@]} == 0 )); then
@@ -630,11 +823,17 @@ wizard() {
 # the one walk over ASSET_TYPES; every caller reads ROWS
 # row: type<TAB>source path<TAB>dest subdir<TAB>metadata file<TAB>entry
 walk_entries() {
-  local spec type src_rel dest_rel glob meta src entry
+  local spec type src_rel dest_rel glob meta src entry check
   for spec in "${ASSET_TYPES[@]}"; do
     IFS='|' read -r type src_rel dest_rel glob meta <<<"$spec"
     src="$REPO_ROOT/$src_rel"
     while IFS= read -r entry; do
+      if [[ -z "$meta" || "$meta" == "." ]]; then   # no metadata file means the entry is one
+        check="$src/$entry"
+      else
+        check="$src/$entry/$meta"
+      fi
+      [[ -e "$check" ]] || continue                 # an entry without it is a shell, not an asset
       wanted "$type" "$entry" \
         && printf '%s\t%s\t%s\t%s\t%s\n' "$type" "$src/$entry" "$dest_rel" "$meta" "$entry"
     done < <(enumerate_entries "$src" "$glob")
@@ -648,28 +847,50 @@ compute_label_width() {
   local row type src dest_rel meta entry width=0
   for row in "${ROWS[@]}"; do
     unpack_row "$row"
-    (( ${#type} + ${#entry} + 1 > width )) && width=$(( ${#type} + ${#entry} + 1 ))
+    (( ${#entry} > width )) && width=${#entry}
   done
   printf '%s' "$(( width > 0 ? width : 12 ))"
 }
 
-install_entries() {
-  local root="$1" row type src dest_rel meta entry dest_dir made=""
+# "3 skills, 1 script", in the order the types appear
+count_types() {
+  local row type src dest_rel meta entry out="" t types=()
+  local -A n=()
   for row in "${ROWS[@]}"; do
     unpack_row "$row"
-    dest_dir="$root/$dest_rel"
-    if [[ "$made" != *"|$dest_dir|"* ]]; then
-      run mkdir -p -- "$dest_dir"
-      made+="|$dest_dir|"
-    fi
-    "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$type/$entry"
+    [[ -z "${n[$type]+x}" ]] && types+=("$type")
+    n[$type]=$(( ${n[$type]:-0} + 1 ))
   done
+  for t in "${types[@]}"; do out+="${out:+, }$(plural "${n[$t]}" "$t")"; done
+  printf '%s' "$out"
+}
+
+# one heading per asset type, so the run reads the way the picker looked
+install_entries() {
+  local root="$1" row type src dest_rel meta entry dest_dir last=""
+  local -A made=()
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    if [[ "$type" != "$last" ]]; then
+      last="$type"
+      EMIT_TYPE="$type"
+      EMIT_TYPES+=("$type")
+      printf '\n  %s%s%s\n' "$C_BOLD" "$type" "$C_RESET"
+    fi
+    dest_dir="$root/$dest_rel"
+    if [[ -z "${made[$dest_dir]+x}" ]]; then
+      run mkdir -p -- "$dest_dir"
+      made[$dest_dir]=1
+    fi
+    "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$entry"
+  done
+  printf '\n'
 }
 
 list_assets() {
-  local row type src dest_rel meta entry cols desc t
+  local row type src dest_rel meta entry cols desc t word
   local types=()
-  local -A width=()
+  local -A width=() count=()
   cols="$(term_cols)"
 
   for row in "${ROWS[@]}"; do
@@ -677,12 +898,16 @@ list_assets() {
     if [[ -z "${width[$type]+x}" ]]; then
       types+=("$type")
       width[$type]=0
+      count[$type]=0
     fi
+    count[$type]=$(( count[$type] + 1 ))
     (( ${#entry} > width[$type] )) && width[$type]=${#entry}
   done
 
   for t in "${types[@]}"; do
-    printf '\n  %s%s%s\n' "$C_BOLD" "$t" "$C_RESET"
+    word=entries
+    (( count[$t] == 1 )) && word=entry
+    printf '\n  %s%s%s %s%s %s%s\n' "$C_BOLD" "$t" "$C_RESET" "$C_DIM" "${count[$t]}" "$word" "$C_RESET"
     for row in "${ROWS[@]}"; do
       unpack_row "$row"
       [[ "$type" == "$t" ]] || continue
@@ -712,11 +937,16 @@ FLAGS
   -m, --mode <name>     How to install (default: $DEFAULT_MODE)
   -d, --dest <dir>      Assets root to use, overriding --scope
   -p, --project <dir>   Project to install into (default: cwd)
-  -y, --yes             Take the defaults, ask nothing
+  -y, --yes             Run non-interactively, default what is unset
   -f, --force           Replace destinations install did not create
   -n, --dry-run         Print what would happen, change nothing
   -l, --list            List entries and exit
   -h, --help            Show this help
+
+NAMES
+  A name limits what install takes. It is an entry (system-audit), a
+  type/entry pair (skills/system-audit), or a whole type (skills), spelled
+  as --list prints it. With no name, install takes every entry.
 
 SCOPES
 EOF
@@ -737,7 +967,9 @@ ENVIRONMENT
 EXAMPLES
   $ ./install --list
   $ ./install --scope global --mode link
-  $ ./install system-audit --dry-run
+  $ ./install system-audit -y
+  $ ./install skills/system-audit -y --scope global --mode link
+  $ ./install skills -y --dry-run
 EOF
 }
 
