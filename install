@@ -1,0 +1,846 @@
+#!/usr/bin/env bash
+#
+# Extend: add an ASSET_TYPES row, or define scope_root_<name> / mode_install_<name>.
+# A trailing `return 0` keeps a falsy last test from tripping set -e.
+
+set -euo pipefail
+
+if (( ${BASH_VERSINFO[0]:-0} < 4 )); then
+  printf 'install: needs bash 4.0 or newer, found %s\n' "${BASH_VERSION:-unknown}" >&2
+  exit 1
+fi
+
+readonly BASE_URL="https://shalom2552.github.io/agent-skills"
+readonly CLONE_URL="https://github.com/shalom2552/agent-skills.git"
+
+readonly MARKER=".agent-skills-install"
+readonly DEFAULT_SCOPE="project"
+readonly DEFAULT_MODE="copy"
+
+readonly SOURCE_HOME="${AGENT_SKILLS_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-skills}"  # links point here, so data not cache
+readonly REPO_URL="${AGENT_SKILLS_REPO:-$CLONE_URL}"
+
+# name | source dir (in repo) | destination dir (under root) | entry glob | metadata file (in entry)
+readonly ASSET_TYPES=(
+  "skills|skills|skills|*/|SKILL.md"
+)
+
+TTY_FD=0  # prompts read /dev/tty so they survive curl | bash
+STAGED=""
+BACKUP=""
+BACKUP_DEST=""
+CURSOR_HIDDEN=0
+MENU_DRAWN=0
+MENU_HEAD=0
+MENU_ROWS=()
+MENU_MARK=()
+MENU_INDEX=0
+PICK=""
+
+cleanup() {
+  [[ -t 1 ]] && printf '\033[?25h' >&2
+  [[ -n "$STAGED" ]] && rm -rf -- "$STAGED"
+  if [[ -n "$BACKUP" && -e "$BACKUP" ]]; then
+    [[ -e "$BACKUP_DEST" || -L "$BACKUP_DEST" ]] || mv -- "$BACKUP" "$BACKUP_DEST"
+    rm -rf -- "$BACKUP"
+  fi
+  return 0
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
+
+term_cols() {
+  local cols="${COLUMNS:-}"
+  [[ -z "$cols" ]] && cols="$(tput cols 2>/dev/null || true)"
+  printf '%s' "${cols:-80}"
+}
+
+term_lines() {
+  local rows="${LINES:-}"
+  [[ -z "$rows" ]] && rows="$(tput lines 2>/dev/null || true)"
+  printf '%s' "${rows:-24}"
+}
+
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+  C_BLUE=$'\033[34m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'
+else
+  C_RESET=""; C_DIM=""; C_BOLD=""; C_BLUE=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+fi
+readonly C_RESET C_DIM C_BOLD C_BLUE C_GREEN C_YELLOW C_RED
+
+log()        { printf '  %s\n' "$*"; }
+note()       { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+log_error()  { printf '%sinstall:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+die()        { log_error "$*"; exit 1; }
+die_usage()  { log_error "$*"; printf '\n' >&2; usage >&2; exit 1; }
+
+rule() {
+  local width cols
+  cols="$(term_cols)"
+  width=$(( cols > 64 ? 64 : cols ))
+  printf '%s' "$C_DIM"
+  printf '─%.0s' $(seq 1 "$width")
+  printf '%s\n' "$C_RESET"
+}
+
+banner() {
+  rule
+  printf '  %sinstall%s  agent-skills\n' "$C_BOLD" "$C_RESET"
+  rule
+}
+
+field_line() { printf '  %-8s %s\n' "$1" "$2"; }
+
+truncate_to() {
+  local text="$1" max="$2"
+  (( max < 4 )) && { printf ''; return; }
+  if (( ${#text} > max )); then
+    printf '%s…' "${text:0:max-1}"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+status_glyph() {
+  case "$1" in
+    linked|copied|updated) printf '%s+%s' "$C_GREEN" "$C_RESET" ;;
+    current)               printf '%s=%s' "$C_DIM" "$C_RESET" ;;
+    blocked)               printf '%s!%s' "$C_YELLOW" "$C_RESET" ;;
+    *)                     printf ' ' ;;
+  esac
+}
+
+declare -A COUNTS=()
+
+emit() {
+  local status="$1" label="$2" detail="${3:-}"
+  COUNTS["$status"]=$(( ${COUNTS["$status"]:-0} + 1 ))
+  if [[ -z "$detail" ]]; then
+    printf '  %s %s\n' "$(status_glyph "$status")" "$label"
+  else
+    printf '  %s %-*s %s%s%s\n' \
+      "$(status_glyph "$status")" "$LABEL_WIDTH" "$label" "$C_DIM" "$detail" "$C_RESET"
+  fi
+}
+
+summary() {
+  local order=(linked updated copied current blocked) status line=""
+  for status in "${order[@]}"; do
+    (( ${COUNTS["$status"]:-0} )) && line+="${line:+, }${COUNTS[$status]} $status"
+  done
+  rule
+  log "${line:-nothing to do}"
+  (( ${COUNTS[blocked]:-0} )) && note "blocked entries exist and were not created by install; --force replaces them"
+  return 0
+}
+
+abspath() {
+  local path="$1" dir
+  [[ "$path" != /* ]] && path="$PWD/$path"
+  if [[ -d "$path" ]]; then
+    (cd -- "$path" && pwd)
+    return 0
+  fi
+  dir="$(dirname -- "$path")"
+  if [[ -d "$dir" ]]; then
+    printf '%s/%s\n' "$(cd -- "$dir" && pwd)" "$(basename -- "$path")"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+# shellcheck disable=SC2088 # the tilde is for reading, never for expansion
+tilde() {
+  local path="$1"
+  [[ -n "${HOME:-}" && "$path" == "$HOME"/* ]] && path="~/${path#"$HOME"/}"
+  printf '%s' "$path"
+}
+
+dry() {
+  local out="$*" cols
+  cols="$(term_cols)"
+  [[ -n "${HOME:-}" ]] && out="${out//"$HOME"/'~'}"
+  printf '    %swould: %s%s\n' "$C_DIM" "$(truncate_to "$out" $(( cols - 13 )))" "$C_RESET"
+}
+
+run() {
+  if (( DRY_RUN )); then
+    dry "$@"
+  else
+    "$@"
+  fi
+}
+
+registered() {
+  local prefix="$1"
+  declare -F | awk -v p="$prefix" '$3 ~ "^" p { print substr($3, length(p) + 1) }' | sort
+}
+
+enumerate_entries() {
+  local src="$1" glob="$2"
+  [[ -d "$src" ]] || return 0
+  (
+    shopt -s nullglob
+    cd -- "$src" || exit 0
+    # shellcheck disable=SC2086 # glob is data and must expand
+    for entry in $glob; do printf '%s\n' "${entry%/}"; done
+  )
+}
+
+meta_path() {
+  local entry_path="$1" meta="$2"
+  if [[ -z "$meta" || "$meta" == "." ]]; then
+    printf '%s' "$entry_path"
+  else
+    printf '%s/%s' "$entry_path" "$meta"
+  fi
+}
+
+describe_entry() {
+  local meta="$1"
+  [[ -f "$meta" ]] || return 0
+  head -n 20 -- "$meta" \
+    | grep -m1 '^description:' \
+    | sed -e 's/^description:[[:space:]]*//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+    || true
+}
+
+wanted() {
+  local type="$1" entry="$2" f
+  (( ${#FILTERS[@]} == 0 )) && return 0
+  for f in "${FILTERS[@]}"; do
+    [[ "$f" == "$entry" || "$f" == "$type/$entry" || "$f" == "$type" ]] && return 0
+  done
+  return 1
+}
+
+# a copied directory carries the marker inside; a copied file gets one alongside
+sidecar_marker() { printf '%s/.%s%s' "$(dirname -- "$1")" "$(basename -- "$1")" "$MARKER"; }
+
+owned_by_installer() {
+  local dest="$1"
+  [[ -L "$dest" ]] && return 0
+  [[ -d "$dest" && -e "$dest/$MARKER" ]] && return 0
+  [[ -e "$(sidecar_marker "$dest")" ]] && return 0
+  return 1
+}
+
+write_marker() {
+  local target="$1" src="$2" path
+  if [[ -d "$target" ]]; then path="$target/$MARKER"; else path="$(sidecar_marker "$target")"; fi
+  printf 'source=%s\ninstalled=%s\n' "$src" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$path"
+}
+
+drop_dest() {
+  run rm -rf -- "$1"
+  [[ -e "$(sidecar_marker "$1")" ]] && run rm -f -- "$(sidecar_marker "$1")"
+  return 0
+}
+
+has_assets() {
+  local root="$1" spec name src_rel rest
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name src_rel rest <<<"$spec"
+    [[ -d "$root/$src_rel" ]] && return 0
+  done
+  return 1
+}
+
+fetch_source() {
+  local origin
+  [[ -n "$REPO_URL" && "$REPO_URL" != "<"* ]] || die "no checkout here and no clone URL; set AGENT_SKILLS_REPO"
+  command -v git >/dev/null || die "git not found; needed to fetch $REPO_URL"
+
+  if [[ -d "$SOURCE_HOME/.git" ]]; then
+    origin="$(git -C "$SOURCE_HOME" remote get-url origin 2>/dev/null || true)"
+    [[ "$origin" == "$REPO_URL" ]] \
+      || die "$SOURCE_HOME is a checkout of ${origin:-an unknown repo}; set AGENT_SKILLS_HOME to another path"
+    note "updating $SOURCE_HOME"
+    git -C "$SOURCE_HOME" fetch -q --depth 1 origin HEAD
+    git -C "$SOURCE_HOME" reset -q --hard FETCH_HEAD
+  else
+    note "cloning $REPO_URL into $SOURCE_HOME"
+    mkdir -p -- "$(dirname -- "$SOURCE_HOME")"
+    git clone -q --depth 1 -- "$REPO_URL" "$SOURCE_HOME"
+  fi
+
+  has_assets "$SOURCE_HOME" || die "no assets found in $SOURCE_HOME"
+  REPO_ROOT="$SOURCE_HOME"
+}
+
+resolve_source() {
+  local self="${BASH_SOURCE[0]:-}" dir
+  if [[ -n "$self" && -f "$self" ]]; then
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if has_assets "$dir"; then
+      REPO_ROOT="$dir"
+      return 0
+    fi
+  fi
+  fetch_source
+}
+
+scope_root_global()  { printf '%s\n' "${CLAUDE_HOME:-$HOME/.claude}"; }
+scope_help_global()  { printf 'All projects (%s)\n' "$(tilde "$(scope_root_global)")"; }
+
+scope_root_project() { printf '%s/.claude\n' "$(abspath "${PROJECT_DIR:-$PWD}")"; }
+scope_help_project() { printf 'This project only (%s)\n' "$(tilde "$(scope_root_project)")"; }
+
+resolve_root() {
+  [[ -n "$DEST_OVERRIDE" ]] && { abspath "$DEST_OVERRIDE"; return; }
+  "scope_root_${SCOPE}"
+}
+
+mode_help_copy() { printf 'Own copy, refreshed on every run\n'; }
+mode_help_link() { printf 'Symlink, so source edits apply with no re-run\n'; }
+
+may_replace() {
+  local dest="$1" label="$2"
+  [[ -e "$dest" || -L "$dest" ]] || return 0
+  owned_by_installer "$dest" && return 0
+  (( FORCE )) && return 0
+  if (( INTERACTIVE )) && (( ! DRY_RUN )); then
+    local allow=0
+    printf '\n'
+    note "$label exists and was not installed by install"
+    confirm "replace it?" "no" && allow=1
+    menu_clear 2                        # the question and its blank line go with the menu
+    (( allow )) && return 0
+  fi
+  emit blocked "$label" "exists, not installed here"
+  return 1
+}
+
+mode_install_link() {
+  local src="$1" dest="$2" label="$3"
+
+  if [[ -L "$dest" && "$(readlink -- "$dest")" == "$src" ]]; then
+    emit current "$label" "up to date"
+    return 0
+  fi
+
+  may_replace "$dest" "$label" || return 0
+
+  local status="linked"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    [[ -L "$dest" ]] && status="updated"
+    drop_dest "$dest"
+  fi
+  run ln -s -- "$src" "$dest"
+  emit "$status" "$label"
+}
+
+mode_install_copy() {
+  local src="$1" dest="$2" label="$3"
+
+  may_replace "$dest" "$label" || return 0
+
+  if (( DRY_RUN )); then
+    dry "cp -R -- $src $dest"
+    emit copied "$label"
+    return 0
+  fi
+
+  STAGED="${dest}.installing.$$"
+  rm -rf -- "$STAGED"
+  cp -R -- "$src" "$STAGED"
+  [[ -d "$STAGED" ]] && write_marker "$STAGED" "$src"
+
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    BACKUP="${dest}.previous.$$"
+    BACKUP_DEST="$dest"
+    rm -rf -- "$BACKUP"
+    mv -- "$dest" "$BACKUP"
+  fi
+
+  mv -- "$STAGED" "$dest"
+  STAGED=""
+  if [[ -n "$BACKUP" ]]; then
+    rm -rf -- "$BACKUP"
+    BACKUP=""; BACKUP_DEST=""
+  fi
+  [[ -d "$dest" ]] || write_marker "$dest" "$src"
+
+  emit copied "$label"
+}
+
+hide_cursor() { CURSOR_HIDDEN=1; printf '\033[?25l' >&2; }
+show_cursor() { (( CURSOR_HIDDEN )) && printf '\033[?25h' >&2; CURSOR_HIDDEN=0; return 0; }
+
+# the brace group keeps 2>/dev/null off the exec itself, which would redirect fd 2 for good
+open_tty() {
+  if [[ -r /dev/tty ]] && { exec 3</dev/tty; } 2>/dev/null; then
+    TTY_FD=3
+    return 0
+  fi
+  [[ -t 0 ]] && { TTY_FD=0; return 0; }
+  return 1
+}
+
+# sets KEY
+read_key() {
+  local k rest
+  IFS= read -rsn1 -u "$TTY_FD" k || { KEY="quit"; return 0; }
+  case "$k" in
+    "")    KEY="enter" ;;
+    " ")   KEY="toggle" ;;
+    $'\e')
+      IFS= read -rsn2 -t 0.2 -u "$TTY_FD" rest || rest=""   # slow links split arrow keys
+      case "$rest" in
+        "[A"|"OA") KEY="up" ;;
+        "[B"|"OB") KEY="down" ;;
+        "")        KEY="quit" ;;
+        *)         KEY="other" ;;
+      esac ;;
+    k)     KEY="up" ;;
+    j)     KEY="down" ;;
+    q)     KEY="quit" ;;
+    *)     KEY="other" ;;
+  esac
+  return 0
+}
+
+# one frame per keystroke, written in a single call, so nothing flickers.
+# each frame overwrites the one before it, so menus replace each other in place.
+menu_draw() {
+  local title="$1" multi="$2" count="$3" idx="$4" cols="$5"
+  local namew="$6" helpw="$7" top="$8" view="$9" head="${10}" marked="${11}"
+  local frame="" line hint name help mark tint i foot=""
+
+  if (( multi )); then
+    hint="↑/↓ move, space toggle, enter confirm, q cancel"
+  else
+    hint="↑/↓ move, enter select, q cancel"
+  fi
+
+  (( MENU_DRAWN )) && frame+=$'\033'"[${MENU_DRAWN}A"
+  frame+=$'\033[J'
+
+  printf -v line '  %s%s%s' "$C_BOLD" "$(truncate_to "$title" $(( cols - 2 )))" "$C_RESET"
+  frame+="$line"$'\n'
+  printf -v line '  %s%s%s' "$C_DIM" "$(truncate_to "$hint" $(( cols - 2 )))" "$C_RESET"
+  frame+="$line"$'\n'
+
+  for (( i = top; i < top + view; i++ )); do
+    help=""
+    (( helpw >= 8 )) && help="$(truncate_to "${MENU_ROWS[i]#*$'\t'}" "$helpw")"
+    mark=""
+    if (( multi )); then
+      if (( head && i == 0 )); then       # the all row is a tri-state box, so it reads as a control
+        if (( marked == count - head )); then
+          mark="${C_DIM}[x]${C_RESET} "
+        elif (( marked )); then
+          mark="${C_DIM}[~]${C_RESET} "
+        else
+          mark="${C_DIM}[ ]${C_RESET} "
+        fi
+      elif (( MENU_MARK[i] )); then
+        mark="${C_GREEN}[x]${C_RESET} "
+      else
+        mark="${C_DIM}[ ]${C_RESET} "
+      fi
+    fi
+    name="$(truncate_to "${MENU_ROWS[i]%%$'\t'*}" "$namew")"
+    tint=""
+    (( multi && head && i == 0 )) && tint="$C_DIM"
+    if (( i == idx )); then
+      printf -v line '  %s>%s %s%s%s%-*s%s  %s%s%s' \
+        "$C_BLUE" "$C_RESET" "$mark" "$tint" "$C_BOLD" "$namew" "$name" "$C_RESET" "$C_DIM" "$help" "$C_RESET"
+    else
+      printf -v line '    %s%s%-*s%s  %s%s%s' "$mark" "$tint" "$namew" "$name" "$C_RESET" "$C_DIM" "$help" "$C_RESET"
+    fi
+    frame+="$line"$'\n'
+  done
+
+  (( multi )) && foot="$marked of $(( count - head )) selected"
+  if (( count > view )); then                       # range counts entries, not the all row
+    local from=$(( top + 1 - head )) to=$(( top + view - head ))
+    (( from < 1 )) && from=1
+    foot+="${foot:+, }showing $from-$to"
+  fi
+  printf -v line '  %s%s%s' "$C_DIM" "$(truncate_to "$foot" $(( cols - 2 )))" "$C_RESET"
+  frame+="$line"$'\n'
+
+  printf '%s' "$frame" >&2
+  MENU_DRAWN=$(( view + 3 ))
+}
+
+menu_clear() {
+  local lines=$(( MENU_DRAWN + ${1:-0} ))
+  (( lines )) && printf '\033[%dA\033[J' "$lines" >&2
+  MENU_DRAWN=0
+  return 0
+}
+
+menu_mark_all() {
+  local value="$1" head="$2" count="$3" i
+  for (( i = head; i < count; i++ )); do MENU_MARK[i]=$value; done
+}
+
+# MENU_ROWS holds "name<TAB>help". single sets MENU_INDEX, multi sets MENU_MARK.
+# MENU_HEAD=1 makes row 0 a select-all checkbox. returns 1 if cancelled.
+menu_run() {
+  local title="$1" multi="$2"
+  local count=${#MENU_ROWS[@]} head=${MENU_HEAD:-0}
+  local idx=${MENU_INDEX:-0} top=0 cols rows view namew helpw i name marked=0
+
+  (( count > head )) || return 1
+  (( idx >= 0 && idx < count )) || idx=0
+  hide_cursor
+
+  while true; do
+    if (( multi )); then
+      marked=0
+      for (( i = head; i < count; i++ )); do
+        (( MENU_MARK[i] )) && marked=$(( marked + 1 ))
+      done
+      (( head )) && MENU_MARK[0]=$(( marked == count - head ))
+    fi
+
+    cols="$(term_cols)"
+    rows="$(term_lines)"
+    view=$(( rows - 6 ))
+    (( view > count )) && view=$count
+    (( view < 1 )) && view=1
+
+    (( idx < top )) && top=$idx
+    (( idx >= top + view )) && top=$(( idx - view + 1 ))
+    (( top > count - view )) && top=$(( count - view ))
+    (( top < 0 )) && top=0
+
+    namew=0
+    for (( i = top; i < top + view; i++ )); do
+      name="${MENU_ROWS[i]%%$'\t'*}"
+      (( ${#name} > namew )) && namew=${#name}
+    done
+    (( namew > cols / 2 )) && namew=$(( cols / 2 ))
+    (( namew < 4 )) && namew=4
+    helpw=$(( cols - namew - 12 ))
+
+    menu_draw "$title" "$multi" "$count" "$idx" "$cols" "$namew" "$helpw" "$top" "$view" "$head" "$marked"
+
+    read_key
+    case "$KEY" in
+      up)    idx=$(( (idx - 1 + count) % count )) ;;
+      down)  idx=$(( (idx + 1) % count )) ;;
+      toggle)
+        if (( multi )); then
+          if (( head && idx == 0 )); then
+            menu_mark_all $(( ! MENU_MARK[0] )) "$head" "$count"
+          else
+            MENU_MARK[idx]=$(( ! MENU_MARK[idx] ))
+          fi
+        fi ;;
+      enter)
+        if (( multi && marked == 0 )); then continue; fi
+        MENU_INDEX=$idx
+        show_cursor
+        return 0 ;;
+      quit)  show_cursor; return 1 ;;
+    esac
+  done
+}
+
+confirm() {
+  local question="$1" default="${2:-yes}"
+  MENU_ROWS=("yes"$'\t' "no"$'\t')
+  MENU_HEAD=0
+  MENU_INDEX=0
+  [[ "$default" == "no" ]] && MENU_INDEX=1
+  menu_run "$question" 0 || return 1
+  [[ "${MENU_ROWS[$MENU_INDEX]%%$'\t'*}" == "yes" ]]
+}
+
+# the default sits at the top of the list
+choose() {
+  local title="$1" prefix="$2" help_prefix="$3" default="$4"
+  local name help help_fn rest=()
+  MENU_ROWS=()
+  MENU_HEAD=0
+  MENU_INDEX=0
+  while IFS= read -r name; do
+    help_fn="${help_prefix}${name}"
+    help=""
+    if declare -F "$help_fn" >/dev/null; then help="$("$help_fn")"; fi
+    if [[ "$name" == "$default" ]]; then
+      MENU_ROWS+=("$name"$'\t'"$help")
+    else
+      rest+=("$name"$'\t'"$help")
+    fi
+  done < <(registered "$prefix")
+  MENU_ROWS+=( ${rest[@]+"${rest[@]}"} )
+  menu_run "$title" 0 || return 1
+  PICK="${MENU_ROWS[$MENU_INDEX]%%$'\t'*}"
+}
+
+# ROWS in, chosen subset of ROWS out
+pick_entries() {
+  local row type src dest_rel meta entry label desc first="" prefixed=0 i
+  local kept=()
+
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    [[ -z "$first" ]] && first="$type"
+    [[ "$type" == "$first" ]] || prefixed=1
+  done
+
+  MENU_HEAD=1
+  MENU_ROWS=("all"$'\t'"select or clear every entry")
+  MENU_MARK=(0)
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    label="$entry"
+    (( prefixed )) && label="$type/$entry"
+    desc="$(describe_entry "$(meta_path "$src" "$meta")")"
+    MENU_ROWS+=("$label"$'\t'"$desc")
+    MENU_MARK+=(0)
+  done
+
+  MENU_INDEX=0
+  menu_run "what to install" 1 || return 1
+
+  for i in "${!ROWS[@]}"; do
+    if (( MENU_MARK[i + 1] )); then kept+=("${ROWS[$i]}"); fi
+  done
+  ROWS=( ${kept[@]+"${kept[@]}"} )
+}
+
+cancelled() { menu_clear 2; log "cancelled"; exit 0; }
+
+# every question replaces the one before it, and the last one leaves no trace
+wizard() {
+  note "${#ROWS[@]} entries found in $(basename -- "$REPO_ROOT")"
+  printf '\n'
+  confirm "continue?" "yes" || cancelled
+  if (( ${#FILTERS[@]} == 0 )); then
+    pick_entries || cancelled
+  fi
+  if (( ! MODE_SET )); then
+    choose "install mode" "mode_install_" "mode_help_" "$MODE" || cancelled
+    MODE="$PICK"
+  fi
+  if (( ! SCOPE_SET )); then
+    choose "install scope" "scope_root_" "scope_help_" "$SCOPE" || cancelled
+    SCOPE="$PICK"
+  fi
+  menu_clear 2
+}
+
+# the one walk over ASSET_TYPES; every caller reads ROWS
+# row: type<TAB>source path<TAB>dest subdir<TAB>metadata file<TAB>entry
+walk_entries() {
+  local spec type src_rel dest_rel glob meta src entry
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r type src_rel dest_rel glob meta <<<"$spec"
+    src="$REPO_ROOT/$src_rel"
+    while IFS= read -r entry; do
+      wanted "$type" "$entry" \
+        && printf '%s\t%s\t%s\t%s\t%s\n' "$type" "$src/$entry" "$dest_rel" "$meta" "$entry"
+    done < <(enumerate_entries "$src" "$glob")
+  done
+  return 0
+}
+
+unpack_row() { IFS=$'\t' read -r type src dest_rel meta entry <<<"$1"; }
+
+compute_label_width() {
+  local row type src dest_rel meta entry width=0
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    (( ${#type} + ${#entry} + 1 > width )) && width=$(( ${#type} + ${#entry} + 1 ))
+  done
+  printf '%s' "$(( width > 0 ? width : 12 ))"
+}
+
+install_entries() {
+  local root="$1" row type src dest_rel meta entry dest_dir made=""
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    dest_dir="$root/$dest_rel"
+    if [[ "$made" != *"|$dest_dir|"* ]]; then
+      run mkdir -p -- "$dest_dir"
+      made+="|$dest_dir|"
+    fi
+    "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$type/$entry"
+  done
+}
+
+list_assets() {
+  local row type src dest_rel meta entry cols desc t
+  local types=()
+  local -A width=()
+  cols="$(term_cols)"
+
+  for row in "${ROWS[@]}"; do
+    unpack_row "$row"
+    if [[ -z "${width[$type]+x}" ]]; then
+      types+=("$type")
+      width[$type]=0
+    fi
+    (( ${#entry} > width[$type] )) && width[$type]=${#entry}
+  done
+
+  for t in "${types[@]}"; do
+    printf '\n  %s%s%s\n' "$C_BOLD" "$t" "$C_RESET"
+    for row in "${ROWS[@]}"; do
+      unpack_row "$row"
+      [[ "$type" == "$t" ]] || continue
+      desc="$(describe_entry "$(meta_path "$src" "$meta")")"
+      desc="$(truncate_to "$desc" $(( cols - width[$t] - 8 )))"
+      printf '    %-*s  %s%s%s\n' "${width[$t]}" "$entry" "$C_DIM" "$desc" "$C_RESET"
+    done
+  done
+  printf '\n'
+}
+
+usage() {
+  local name
+  cat <<EOF
+Install this repo's assets into an agent assets root.
+
+On a terminal, install asks what to install, then mode and scope. Name entries
+or pass flags to skip the questions.
+
+USAGE
+  $ ./install [flags] [name ...]
+  $ curl -fsSL $BASE_URL/install | bash
+  $ curl -fsSL $BASE_URL/install | bash -s -- --mode link --scope global
+
+FLAGS
+  -s, --scope <name>    Where to install (default: $DEFAULT_SCOPE)
+  -m, --mode <name>     How to install (default: $DEFAULT_MODE)
+  -d, --dest <dir>      Assets root to use, overriding --scope
+  -p, --project <dir>   Project to install into (default: cwd)
+  -y, --yes             Take the defaults, ask nothing
+  -f, --force           Replace destinations install did not create
+  -n, --dry-run         Print what would happen, change nothing
+  -l, --list            List entries and exit
+  -h, --help            Show this help
+
+SCOPES
+EOF
+  while IFS= read -r name; do
+    printf '  %-10s %s\n' "$name" "$("scope_help_${name}" 2>/dev/null || true)"
+  done < <(registered "scope_root_")
+  printf '\nMODES\n'
+  while IFS= read -r name; do
+    printf '  %-10s %s\n' "$name" "$("mode_help_${name}" 2>/dev/null || true)"
+  done < <(registered "mode_install_")
+  cat <<EOF
+
+ENVIRONMENT
+  AGENT_SKILLS_REPO     Clone URL, overriding CLONE_URL in this script
+  AGENT_SKILLS_HOME     Checkout used by a piped run (default: $(tilde "$SOURCE_HOME"))
+  CLAUDE_HOME           Global assets root (default: ~/.claude)
+
+EXAMPLES
+  $ ./install --list
+  $ ./install --scope global --mode link
+  $ ./install system-audit --dry-run
+EOF
+}
+
+# sets OPT_VALUE, and OPT_CONSUMED when it took the next argv word
+take_value() {
+  local flag="$1" inline="$2" next="$3"
+  OPT_CONSUMED=0
+  if (( OPT_INLINE )); then
+    [[ -n "$inline" ]] || die_usage "$flag needs a value"
+    OPT_VALUE="$inline"
+  elif [[ -n "$next" && "$next" != -* ]]; then
+    OPT_VALUE="$next"
+    OPT_CONSUMED=1
+  else
+    die_usage "$flag needs a value"
+  fi
+}
+
+parse_args() {
+  local arg value
+  OPT_VALUE=""; OPT_CONSUMED=0; OPT_INLINE=0
+  while (( $# )); do
+    arg="$1"
+    value=""
+    OPT_INLINE=0
+    if [[ "$arg" == --*=* ]]; then
+      value="${arg#*=}"
+      arg="${arg%%=*}"
+      OPT_INLINE=1
+    fi
+    case "$arg" in
+      -s|--scope)   take_value "$arg" "$value" "${2:-}"; SCOPE="$OPT_VALUE"; SCOPE_SET=1 ;;
+      -m|--mode)    take_value "$arg" "$value" "${2:-}"; MODE="$OPT_VALUE";  MODE_SET=1 ;;
+      -d|--dest)    take_value "$arg" "$value" "${2:-}"; DEST_OVERRIDE="$OPT_VALUE"; SCOPE_SET=1 ;;
+      -p|--project) take_value "$arg" "$value" "${2:-}"; PROJECT_DIR="$OPT_VALUE"
+                    (( SCOPE_SET )) || { SCOPE="project"; SCOPE_SET=1; } ;;
+      -y|--yes)     ASSUME_YES=1 ;;
+      -f|--force)   FORCE=1 ;;
+      -n|--dry-run) DRY_RUN=1 ;;
+      -l|--list)    DO_LIST=1 ;;
+      -h|--help)    DO_HELP=1 ;;
+      -*)           die_usage "unknown option: $arg" ;;
+      *)            FILTERS+=("$arg") ;;
+    esac
+    (( OPT_CONSUMED )) && shift
+    OPT_CONSUMED=0
+    shift
+  done
+}
+
+check_paths() {
+  [[ -z "${PROJECT_DIR:-}" || -d "$PROJECT_DIR" ]] || die "no such directory: $PROJECT_DIR"
+  if [[ -n "$DEST_OVERRIDE" && ! -d "$DEST_OVERRIDE" ]]; then
+    [[ -d "$(dirname -- "$DEST_OVERRIDE")" ]] || die "no such directory: $(dirname -- "$DEST_OVERRIDE")"
+  fi
+}
+
+main() {
+  SCOPE="$DEFAULT_SCOPE"; SCOPE_SET=0
+  MODE="$DEFAULT_MODE";   MODE_SET=0
+  DEST_OVERRIDE=""
+  FORCE=0; DRY_RUN=0; ASSUME_YES=0; DO_LIST=0; DO_HELP=0
+  FILTERS=()
+  LABEL_WIDTH=12
+  KEY=""
+
+  parse_args "$@"
+
+  (( DO_HELP )) && { usage; return 0; }
+
+  declare -F "scope_root_${SCOPE}" >/dev/null   || die_usage "unknown scope: $SCOPE"
+  declare -F "mode_install_${MODE}" >/dev/null  || die_usage "unknown mode: $MODE"
+  check_paths
+
+  resolve_source
+
+  local row
+  ROWS=()
+  while IFS= read -r row; do ROWS+=("$row"); done < <(walk_entries)
+  (( ${#ROWS[@]} == 0 )) && die "no matching entries"
+
+  (( DO_LIST )) && { list_assets; return 0; }
+
+  INTERACTIVE=0
+  if (( ! ASSUME_YES )) && [[ -t 1 ]] && open_tty; then
+    INTERACTIVE=1
+  fi
+
+  banner
+  (( INTERACTIVE )) && wizard
+
+  local root
+  root="$(resolve_root)"
+  LABEL_WIDTH="$(compute_label_width)"
+
+  field_line "source" "$(tilde "$REPO_ROOT")"
+  field_line "target" "$(tilde "$root")"
+  field_line "mode" "$MODE$( (( DRY_RUN )) && printf ' (dry run)')"
+  rule
+
+  install_entries "$root"
+
+  summary
+}
+
+main "$@"
