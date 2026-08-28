@@ -14,6 +14,7 @@ Or clone and run `./install`. See `./install --help` for options.
 
 | Skill | Description |
 | --- | --- |
+| `docs-sync` | Find and fix drift between docs and code. |
 | `system-audit` | Read-only health, security and cleanliness audit of the machine. |
 | `system-fix` | Diagnose, fix, and document a system or config fault. |
 
