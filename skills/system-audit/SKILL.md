@@ -53,12 +53,12 @@ Commit as `chore(audit): system audit <YYYY-MM-DD>`.
 
 ## 4. Report to the user
 
-The doc is for the next agent, the terminal reply is for the user: counts per tier, then the calls to action.
+The doc is for the next agent, the terminal reply is for the user: counts per tier, then one bullet per Critical and Warning naming the fault and its evidence.
 
-One call to action per Critical, and per Warning only where acting now beats waiting. Each names the fault and the path to today's doc. Where a fix skill is installed, make it a paste-ready invocation of it:
+Under each bullet, indent its call to action as a blockquoted code span. It names the fault in one clause plus the path to today's doc. Where a fix skill is installed, make it a paste-ready invocation of it:
 
 ```
-/system-fix journald has grown to 4.2G, vacuum settings never applied. See ~/Documents/system-audits/2026-08-27.md
+  > `/system-fix journald grown to 4.2G, vacuum settings never applied. See ~/Documents/system-audits/2026-08-27.md`
 ```
 
 Done when the reply fits on a screen and every Critical has its line.
