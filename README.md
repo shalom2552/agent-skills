@@ -15,9 +15,12 @@ Or clone and run `./install`. See `./install --help` for options.
 | Skill | Description |
 | --- | --- |
 | `docs-sync` | Find and fix drift between docs and code. |
-| `system-audit` | Read-only health, security and cleanliness audit of the machine. |
-| `system-fix` | Diagnose, fix, and document a system or config fault. |
+| `setup-agent-skills` | Install, manage and wire up shalom2552's agent-skills assets. |
+| `system-audit` | Read-only health, security and cleanliness audit of this machine. |
+| `system-fix` | Diagnose, fix, and document a system or config fault on this machine. |
 
 ## Scripts
 
-`scripts/statusline.sh` — status line for Claude Code.
+`scripts/statusline.sh` - status line for Claude Code.
+
+Run `setup-agent-skills` to wire `statusLine`.
