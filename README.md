@@ -15,6 +15,7 @@ Or clone and run `./install`. See `./install --help` for options.
 | Skill | Description |
 | --- | --- |
 | `docs-sync` | Find and fix drift between docs and code. |
+| `dotconf` | Answer, change, and remember dotfile and app configs. |
 | `read-only` | Lock the session to read-only; change nothing. |
 | `setup-agent-skills` | Install, manage and wire up shalom2552's agent-skills assets. |
 | `system-audit` | Read-only health, security and cleanliness audit of this machine. |
