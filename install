@@ -176,6 +176,7 @@ status_glyph() {
   esac
 }
 
+declare -A PENDING=()
 declare -A COUNTS=()
 declare -A TYPE_COUNTS=()
 EMIT_TYPE=""
@@ -359,6 +360,60 @@ has_assets() {
   return 1
 }
 
+in_commit() { git -C "$SOURCE_HOME" cat-file -e "$1:$2" 2>/dev/null; }
+
+# sets PENDING to the entries FETCH_HEAD changes, keyed type/entry: added, changed or removed
+upstream_changes() {
+  local path spec name src_rel rest entry
+  while IFS= read -r path; do
+    for spec in "${ASSET_TYPES[@]}"; do
+      IFS='|' read -r name src_rel rest <<<"$spec"
+      [[ "$path" == "$src_rel"/* ]] || continue
+      entry="${path#"$src_rel"/}"
+      entry="${entry%%/*}"
+      if ! in_commit HEAD "$src_rel/$entry"; then
+        PENDING["$name/$entry"]=added
+      elif ! in_commit FETCH_HEAD "$src_rel/$entry"; then
+        PENDING["$name/$entry"]=removed
+      else
+        PENDING["$name/$entry"]=changed
+      fi
+    done
+  done < <(git -C "$SOURCE_HOME" diff --name-only HEAD FETCH_HEAD)
+  return 0
+}
+
+change_glyph() {
+  case "$1" in
+    added)   printf '%s+%s' "$C_GREEN" "$C_RESET" ;;
+    removed) printf '%s-%s' "$C_RED" "$C_RESET" ;;
+    *)       printf '%s~%s' "$C_YELLOW" "$C_RESET" ;;
+  esac
+}
+
+# linked entries point into the checkout, so moving it updates them all at once
+review_update() {
+  local key
+  [[ "$(git -C "$SOURCE_HOME" rev-parse HEAD)" == "$(git -C "$SOURCE_HOME" rev-parse FETCH_HEAD)" ]] && return 0
+  upstream_changes
+  if (( ${#PENDING[@]} )); then
+    log "${C_BOLD}upstream changed${C_RESET} ${C_DIM}$(git -C "$SOURCE_HOME" rev-parse --short FETCH_HEAD)${C_RESET}"
+    while IFS= read -r key; do
+      log "  $(change_glyph "${PENDING[$key]}") $key"
+    done < <(printf '%s\n' "${!PENDING[@]}" | sort)
+  fi
+  (( DRY_RUN || DO_LIST )) && return 0
+  if (( INTERACTIVE && ${#PENDING[@]} )); then
+    printf '\n'
+    local apply=0
+    confirm "update the checkout? linked entries change with it" "yes" && apply=1
+    menu_clear 1
+    (( apply )) || return 0
+  fi
+  git -C "$SOURCE_HOME" reset -q --hard FETCH_HEAD
+  PENDING=()
+}
+
 fetch_source() {
   local origin
   [[ -n "$REPO_URL" && "$REPO_URL" != "<"* ]] || die "no checkout here and no clone URL; set AGENT_SKILLS_REPO"
@@ -368,9 +423,9 @@ fetch_source() {
     origin="$(git -C "$SOURCE_HOME" remote get-url origin 2>/dev/null || true)"
     [[ "$origin" == "$REPO_URL" ]] \
       || die "$SOURCE_HOME is a checkout of ${origin:-an unknown repo}; set AGENT_SKILLS_HOME to another path"
-    note "updating $SOURCE_HOME"
+    note "checking $SOURCE_HOME for updates"
     git -C "$SOURCE_HOME" fetch -q --depth 1 origin HEAD
-    git -C "$SOURCE_HOME" reset -q --hard FETCH_HEAD
+    review_update
   else
     note "cloning $REPO_URL into $SOURCE_HOME"
     mkdir -p -- "$(dirname -- "$SOURCE_HOME")"
@@ -887,7 +942,9 @@ pick_entries() {
     fi
     desc="$(describe_entry "$(meta_path "$src" "$meta")")"
     entry_state "$src" "$root/$dest_rel/$entry"
+    [[ "$ENTRY_STATE" == current && -n "${PENDING[$type/$entry]+x}" ]] && ENTRY_STATE="behind"
     case "$ENTRY_STATE" in
+      behind)   tag="update available"; tagc="$C_YELLOW" ;;
       current)  tag="up to date"; tagc="$C_GREEN" ;;
       outdated) tag="outdated";   tagc="" ;;
       foreign)  tag="not ours";   tagc="$C_YELLOW" ;;
@@ -1182,6 +1239,11 @@ main() {
   declare -F "mode_install_${MODE}" >/dev/null  || die_usage "unknown mode: $MODE"
   check_paths
 
+  INTERACTIVE=0
+  if (( ! ASSUME_YES && ! DO_LIST )) && [[ -t 1 ]] && open_tty; then
+    INTERACTIVE=1
+  fi
+
   resolve_source
 
   local row
@@ -1190,11 +1252,6 @@ main() {
   (( ${#ROWS[@]} == 0 )) && die "no matching entries"
 
   (( DO_LIST )) && { list_assets; return 0; }
-
-  INTERACTIVE=0
-  if (( ! ASSUME_YES )) && [[ -t 1 ]] && open_tty; then
-    INTERACTIVE=1
-  fi
 
   banner
   (( INTERACTIVE )) && wizard
