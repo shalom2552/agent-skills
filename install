@@ -414,11 +414,13 @@ review_update() {
   PENDING=()
 }
 
-fetch_source() {
-  local origin
+fetch_ready() {
   [[ -n "$REPO_URL" && "$REPO_URL" != "<"* ]] || die "no checkout here and no clone URL; set AGENT_SKILLS_REPO"
   command -v git >/dev/null || die "git not found; needed to fetch $REPO_URL"
+}
 
+fetch_source() {
+  local origin
   if [[ -d "$SOURCE_HOME/.git" ]]; then
     origin="$(git -C "$SOURCE_HOME" remote get-url origin 2>/dev/null || true)"
     [[ "$origin" == "$REPO_URL" ]] \
@@ -436,16 +438,13 @@ fetch_source() {
   REPO_ROOT="$SOURCE_HOME"
 }
 
-resolve_source() {
+# a run from a checkout installs from it; a piped run has none and must fetch
+local_source() {
   local self="${BASH_SOURCE[0]:-}" dir
-  if [[ -n "$self" && -f "$self" ]]; then
-    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
-    if has_assets "$dir"; then
-      REPO_ROOT="$dir"
-      return 0
-    fi
-  fi
-  fetch_source
+  [[ -n "$self" && -f "$self" ]] || return 1
+  dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+  has_assets "$dir" || return 1
+  REPO_ROOT="$dir"
 }
 
 scope_root_global()  { printf '%s\n' "${CLAUDE_HOME:-$HOME/.claude}"; }
@@ -942,9 +941,10 @@ pick_entries() {
     fi
     desc="$(describe_entry "$(meta_path "$src" "$meta")")"
     entry_state "$src" "$root/$dest_rel/$entry"
-    [[ "$ENTRY_STATE" == current && -n "${PENDING[$type/$entry]+x}" ]] && ENTRY_STATE="behind"
+    [[ "$ENTRY_STATE" == current && -n "${PENDING[$type/$entry]+x}" ]] && ENTRY_STATE="${PENDING[$type/$entry]}"
     case "$ENTRY_STATE" in
-      behind)   tag="update available"; tagc="$C_YELLOW" ;;
+      removed)  tag="removed upstream"; tagc="$C_RED" ;;
+      added|changed) tag="update available"; tagc="$C_YELLOW" ;;
       current)  tag="up to date"; tagc="$C_GREEN" ;;
       outdated) tag="outdated";   tagc="" ;;
       foreign)  tag="not ours";   tagc="$C_YELLOW" ;;
@@ -980,25 +980,42 @@ pick_entries() {
 }
 
 readonly WIZARD_LEAD=4   # the intro lines and their blank go with the last menu
+LEAD=$WIZARD_LEAD        # 0 once the intro is gone, so fetch output printed after it stays
 
-cancelled() { menu_clear "$WIZARD_LEAD"; log "cancelled"; exit 0; }
+cancelled() { menu_clear "$LEAD"; log "cancelled"; exit 0; }
 
-# every question replaces the one before it, and the last one leaves no trace
-wizard() {
-  local asks=() pending="confirmation only" a
+wizard_asks() {
+  local asks=() a out="confirmation only"
   (( MODE_SET ))       || asks+=("mode")
   (( SCOPE_SET ))      || asks+=("scope")
   (( ${#FILTERS[@]} )) || asks+=("which entries")
   if (( ${#asks[@]} )); then
-    pending="${asks[0]}"
-    for a in "${asks[@]:1}"; do pending+=", $a"; done
+    out="${asks[0]}"
+    for a in "${asks[@]:1}"; do out+=", $a"; done
   fi
+  printf '%s' "$out"
+}
 
-  field_line "FOUND" "$(count_types) in $(basename -- "$REPO_ROOT")"
-  field_line "ASKS" "$pending"
-  field_line "WRITES" "nothing until the last answer"
+# a piped run has nothing to show before its first write, the clone or fetch
+wizard_fetch() {
+  field_line "SOURCE" "$REPO_URL"
+  field_line "ASKS" "$(wizard_asks)"
+  field_line "WRITES" "$(tilde "$SOURCE_HOME") next, the rest after the last answer"
   printf '\n'
   confirm "continue?" "yes" || cancelled
+  menu_clear "$LEAD"
+  LEAD=0
+}
+
+# every question replaces the one before it, and the last one leaves no trace
+wizard() {
+  if (( LEAD )); then
+    field_line "FOUND" "$(count_types) in $(basename -- "$REPO_ROOT")"
+    field_line "ASKS" "$(wizard_asks)"
+    field_line "WRITES" "nothing until the last answer"
+    printf '\n'
+    confirm "continue?" "yes" || cancelled
+  fi
   if (( ! MODE_SET )); then
     choose "install mode" "mode_install_" "mode_help_" "$MODE" || cancelled
     MODE="$PICK"
@@ -1010,7 +1027,7 @@ wizard() {
   if (( ${#FILTERS[@]} == 0 )); then
     pick_entries "$(resolve_root)" || cancelled   # state needs mode and scope
   fi
-  menu_clear "$WIZARD_LEAD"
+  menu_clear "$LEAD"
 }
 
 # the one walk over ASSET_TYPES; every caller reads ROWS
@@ -1244,7 +1261,16 @@ main() {
     INTERACTIVE=1
   fi
 
-  resolve_source
+  local bannered=0
+  if ! local_source; then
+    if (( ! DO_LIST )); then
+      banner
+      bannered=1
+    fi
+    fetch_ready
+    (( INTERACTIVE )) && wizard_fetch
+    fetch_source
+  fi
 
   local row
   ROWS=()
@@ -1253,7 +1279,7 @@ main() {
 
   (( DO_LIST )) && { list_assets; return 0; }
 
-  banner
+  (( bannered )) || banner
   (( INTERACTIVE )) && wizard
 
   local root
