@@ -18,6 +18,7 @@ A private git repo that belongs to the agents. Commit notes changes as `docs(<to
 | `INDEX.md` | 60 lines | Map: tool, config path, owning git repo, topic file. Then **Open** (unfinished threads, onboarding pending) and `Sessions since lint: N`. |
 | `topics/<name>.md` | 150 lines | Per tool or area, named after whatever the user runs: **Decisions** (with the reason), **Conventions**, **Rejected**, **Ideas**. |
 | `log/YYYY-MM-DD-<slug>.md` | none | Fixes and multi-file changes: symptom, cause, change, revert. |
+| `scripts/<topic>/<name>` | none | Probes and repros hard to recreate, worth re-running, or useful for the user to run. Named in the topic or log entry that uses them. |
 
 Notes are the cache of what the config cannot say: the reason behind a setting, the convention, the option tried and dropped. A value the agent can read from the file stays in the file.
 

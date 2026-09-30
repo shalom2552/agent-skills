@@ -13,12 +13,13 @@ Three steps in order: read-only investigation, approved fix, write-up. Invoked w
 
 ```
 INDEX.md                       one line per doc
-<topic>.md                     flat until a topic has a second doc
-<topic>/<doc>.md               then together in <topic>/
+topics/<topic>.md              flat until a topic has a second doc
+topics/<topic>/<doc>.md        then together in topics/<topic>/
 backups/<topic>/<file>.<YYYYMMDD>.bak
+scripts/<topic>/<name>         probes and repros worth keeping
 ```
 
-`INDEX.md` lines read `<path> | <status> | <YYYY-MM-DD> | <symptom in a few words>`. Moving a doc into `<topic>/` updates its line. Every doc opens with a matching `Status:` line:
+`INDEX.md` lines read `<path> | <status> | <YYYY-MM-DD> | <symptom in a few words>`. Moving a doc into `topics/<topic>/` updates its line. Every doc opens with a matching `Status:` line:
 
 - **open**: investigated, change proposed, not applied
 - **applied**: change in place and verified
@@ -37,9 +38,11 @@ Web search the fault and the versions it turns on: current docs, release notes, 
 
 Where the cause resists direct observation, get a **red** signal before theorising: one command, already run at least once, that reproduces the user's exact symptom and is fast enough to re-run after every change in step 2.
 
+Check `scripts/<topic>/` for a probe or repro a past investigation left before writing one. Save a new script there only when it is hard to recreate, worth re-running later, or useful for the user to run themselves, and name it in the doc.
+
 Done when you can name the cause, quote the evidence, and separate what was observed from what was inferred.
 
-Write the doc before asking for anything: the step 3 structure, with `Status: open` and the change proposed. Add its `INDEX.md` line. Commit as `docs(scope): investigate <fault>`. The doc and its index line are the only things this step writes.
+Write the doc before asking for anything: the step 3 structure, with `Status: open` and the change proposed. Add its `INDEX.md` line. Commit as `docs(scope): investigate <fault>`. The doc, its index line and any saved script are the only things this step writes.
 
 ## 2. Fix (approval-gated)
 
