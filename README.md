@@ -20,6 +20,7 @@ Or clone and run `./install`. See `./install --help` for options.
 | `setup-agent-skills` | Install, manage and wire up shalom2552's agent-skills assets. |
 | `system-audit` | Read-only health, security and cleanliness audit of this machine. |
 | `system-fix` | Diagnose, fix, and document a system or config fault on this machine. |
+| `to-prompt` | Write a handoff prompt for a fresh agent. |
 
 ## Scripts
 
