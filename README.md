@@ -21,6 +21,7 @@ Or clone and run `./install`. See `./install --help` for options.
 | `system-audit` | Read-only health, security and cleanliness audit of this machine. |
 | `system-fix` | Diagnose, fix, and document a system or config fault on this machine. |
 | `to-prompt` | Write a handoff prompt for a fresh agent. |
+| `walk-with-me` | Learn languages and idioms by coding with a coach. |
 
 ## Scripts
 
