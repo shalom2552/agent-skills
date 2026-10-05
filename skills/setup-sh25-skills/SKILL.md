@@ -1,5 +1,5 @@
 ---
-name: setup-agent-skills
+name: setup-sh25-skills
 description: Install, manage and wire up shalom2552's agent-skills assets.
 argument-hint: "(optional) status | install | remove | setup [entry]"
 disable-model-invocation: true
