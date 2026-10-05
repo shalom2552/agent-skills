@@ -17,7 +17,7 @@ If a `hinted` or `failed` problem is 3 or more days old, serve it as a **re-solv
 
 State the problem with examples, and leave one constraint unstated (input size, duplicates, empty input), the way real interviews do. Answer it when asked.
 
-Start a timer only if asked, by writing the start time to `.walk/timer`.
+Start a timer only if asked, by writing the start time to `timer` in the session folder.
 
 ## Phases
 
@@ -30,7 +30,7 @@ A hint, only when asked, is the smallest nudge that unblocks. Note each one.
 
 ## Critique
 
-Run the solution against the examples and the edge cases an interviewer would try, with the harness in `.walk/scratch/`. Then:
+Run the solution against the examples and the edge cases an interviewer would try, with the harness in the session's `scratch/`. Then:
 
 - Verdict: passes or fails, with the failing input.
 - The four signals, each `strong`, `mixed` or `weak` with one line of evidence: **problem solving**, **coding**, **communication**, **verification**.
