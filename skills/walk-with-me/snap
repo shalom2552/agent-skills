@@ -1,0 +1,11 @@
+#!/bin/sh
+export GIT_DIR="$PWD/.walk/git" GIT_WORK_TREE="$PWD"
+if [ ! -d "$GIT_DIR" ]; then
+  git init -q
+  printf '%s\n' /.walk/ 'walk-*.md' >> "$GIT_DIR/info/exclude"
+fi
+git read-tree --empty
+git add -A
+tree=$(git write-tree)
+[ "$1" = -q ] || git diff "$(cat "$GIT_DIR/last-tree" 2>/dev/null || git hash-object -t tree /dev/null)" "$tree"
+echo "$tree" > "$GIT_DIR/last-tree"
