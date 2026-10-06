@@ -394,7 +394,8 @@ change_glyph() {
 # linked entries point into the checkout, so moving it updates them all at once
 review_update() {
   local key
-  [[ "$(git -C "$SOURCE_HOME" rev-parse HEAD)" == "$(git -C "$SOURCE_HOME" rev-parse FETCH_HEAD)" ]] && return 0
+  [[ "$(git -C "$SOURCE_HOME" rev-parse HEAD)" == "$(git -C "$SOURCE_HOME" rev-parse FETCH_HEAD)" ]] \
+    && { log "up to date"; return 0; }
   upstream_changes
   if (( ${#PENDING[@]} )); then
     log "${C_BOLD}upstream changed${C_RESET} ${C_DIM}$(git -C "$SOURCE_HOME" rev-parse --short FETCH_HEAD)${C_RESET}"
@@ -411,6 +412,7 @@ review_update() {
     (( apply )) || return 0
   fi
   git -C "$SOURCE_HOME" reset -q --hard FETCH_HEAD
+  log "updated to $(git -C "$SOURCE_HOME" rev-parse --short HEAD)"
   PENDING=()
 }
 
@@ -442,7 +444,7 @@ fetch_source() {
 local_source() {
   local self="${BASH_SOURCE[0]:-}" dir
   [[ -n "$self" && -f "$self" ]] || return 1
-  dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+  dir="$(cd -- "$(dirname -- "$(readlink -f -- "$self")")" && pwd)"
   has_assets "$dir" || return 1
   REPO_ROOT="$dir"
 }
@@ -1153,6 +1155,7 @@ FLAGS
   -f, --force           Replace destinations install did not create
   -n, --dry-run         Print what would happen, change nothing
   -l, --list            List entries and exit
+  -u, --update          Update the checkout behind linked entries and exit
   -h, --help            Show this help
 
 NAMES
@@ -1222,6 +1225,7 @@ parse_args() {
       -f|--force)   FORCE=1 ;;
       -n|--dry-run) DRY_RUN=1 ;;
       -l|--list)    DO_LIST=1 ;;
+      -u|--update)  DO_UPDATE=1 ;;
       -h|--help)    DO_HELP=1 ;;
       -*)           die_usage "unknown option: $arg" ;;
       *)            FILTERS+=("$arg") ;;
@@ -1243,7 +1247,7 @@ main() {
   SCOPE="$DEFAULT_SCOPE"; SCOPE_SET=0
   MODE="$DEFAULT_MODE";   MODE_SET=0
   DEST_OVERRIDE=""
-  FORCE=0; DRY_RUN=0; ASSUME_YES=0; DO_LIST=0; DO_HELP=0
+  FORCE=0; DRY_RUN=0; ASSUME_YES=0; DO_LIST=0; DO_HELP=0; DO_UPDATE=0
   FILTERS=()
   LABEL_WIDTH=12
   KEY=""
@@ -1261,8 +1265,14 @@ main() {
     INTERACTIVE=1
   fi
 
+  if (( DO_UPDATE )); then
+    fetch_ready
+    fetch_source
+    return 0
+  fi
+
   local bannered=0
-  if ! local_source; then
+  if ! local_source || [[ "$REPO_ROOT" -ef "$SOURCE_HOME" ]]; then
     if (( ! DO_LIST )); then
       banner
       bannered=1

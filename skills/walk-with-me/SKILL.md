@@ -71,7 +71,7 @@ Two scripts beside them build whatever the language needs, then:
 - `run`: the run suite, printing every case. With arguments, it runs them as input instead and prints the output.
 - `submit`: the run suite, then the hidden suite, stopping at the first failure. With a folder as argument, it builds the code there instead of the task folder's.
 
-Cases are numbered in suite order, the hidden suite continuing after the run suite. Each result is followed by an empty line. A pass prints the case's input. A failure also prints the expected output and the actual one. Both use the examples' notation. A hidden case prints only when it fails, so its input stays hidden until then:
+Cases are numbered in suite order, the hidden suite continuing after the run suite. Each result is followed by an empty line. A pass prints the case's input. A failure also prints the expected output and the actual one. Both use the examples' notation. Whatever the user's code prints during a case follows, indented, under `stdout:`, so debug prints work; it is left out when the case printed nothing. When the task is judged on stdout, that block shows stderr instead. `run <input>` shows the user's prints the same way. A hidden case prints only when it fails, so its input stays hidden until then:
 
 ```
 PASS case 1
@@ -81,7 +81,13 @@ FAIL case 2
   input:    [[1,10],[2,3]]
   expected: [[1,10]]
   got:      [[1,3]]
+  stdout:
+    merging [1,10] with [2,3]
+
+1/2 passed
 ```
+
+The last line counts passing cases out of all cases in the suites run. In a terminal, with `NO_COLOR` unset, `PASS` is bold green, `FAIL` bold red, and the labels (`input:`, `expected:`, `got:`, `stdout:`) dim. Anywhere else, such as the agent's runs, the output stays plain.
 
 The task folder's `run` and `submit` both hold this wrapper, which calls the `tests/` script of the same name. They work from any folder: the user runs `./run` in the task folder, the agent `./<task>/run` from the project directory.
 
