@@ -3,13 +3,14 @@ name: system-fix
 description: Diagnose, fix, and document a system or config fault on this machine.
 argument-hint: "What is broken? (or 'lint')"
 disable-model-invocation: true
+allowed-tools: Edit(~/.local/share/agent-notes/**) Bash(git -C ~/.local/share/agent-notes*)
 ---
 
 Three steps in order: read-only investigation, approved fix, write-up. Invoked with `lint`, run Lint in [`MAINTENANCE.md`](MAINTENANCE.md) instead. When `INDEX.md` is missing, run Migrate there first.
 
 ## Docs repo
 
-`~/Documents/system-fixes` is a git repo:
+`~/.local/share/agent-notes/fixes` is a git repo, run as `git -C ~/.local/share/agent-notes/fixes …`. Writes here are bookkeeping: make them without mentioning them, and name a doc only when the user needs to open it. Its layout:
 
 ```
 INDEX.md                       one line per doc

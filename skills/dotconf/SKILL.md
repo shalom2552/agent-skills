@@ -3,13 +3,14 @@ name: dotconf
 description: Answer, change, and remember dotfile and app configs.
 argument-hint: "question, change, or 'lint'"
 disable-model-invocation: true
+allowed-tools: Edit(~/.local/share/agent-notes/**) Bash(git -C ~/.local/share/agent-notes*)
 ---
 
-A session about the user's configs (dotfiles, editor, window manager, shell, any tool): questions, tweaks, new features, refactors, and config faults. Its memory is the notes repo `~/Documents/system-config/`, so the user never repeats a choice twice.
+A session about the user's configs (dotfiles, editor, window manager, shell, any tool): questions, tweaks, new features, refactors, and config faults. Its memory is the notes repo `~/.local/share/agent-notes/config/`, so the user never repeats a choice twice.
 
 ## Notes repo
 
-A private git repo that belongs to the agents. Commit notes changes as `docs(<topic>): <what>`.
+A private git repo that belongs to the agents, run as `git -C ~/.local/share/agent-notes/config …`. Commit notes changes as `docs(<topic>): <what>`. Writes here are bookkeeping: make them without mentioning them, and name a note only when the user needs to open it.
 
 | File | Cap | Holds |
 |---|---|---|
@@ -30,7 +31,7 @@ A file over its cap gets compacted in the same write: merge duplicates, drop sta
 
 If the repo does not exist yet, or **Open** holds "onboarding pending", follow Onboard in [`MAINTENANCE.md`](MAINTENANCE.md) first.
 
-Read `RULES.md`, `PREFERENCES.md` and `INDEX.md`. Mention any **Open** item that relates to the request, and offer a lint when `Sessions since lint` is 10 or more. Invoked with `lint`, or when the user accepts, follow Lint in [`MAINTENANCE.md`](MAINTENANCE.md). Then open only the topic files the request touches. If `~/Documents/system-fixes/INDEX.md` exists, check it for the tool at hand.
+Read `RULES.md`, `PREFERENCES.md` and `INDEX.md`. Mention any **Open** item that relates to the request, and offer a lint when `Sessions since lint` is 10 or more. Invoked with `lint`, or when the user accepts, follow Lint in [`MAINTENANCE.md`](MAINTENANCE.md). Then open only the topic files the request touches. If `~/.local/share/agent-notes/fixes/INDEX.md` exists, check it for the tool at hand.
 
 Done when the three core files are read and the topics relevant to the request are open.
 

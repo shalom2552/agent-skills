@@ -3,15 +3,16 @@ name: system-audit
 description: Read-only health, security and cleanliness audit of this machine.
 argument-hint: "(optional) area to focus on, e.g. 'security' or 'packages'"
 disable-model-invocation: true
+allowed-tools: Edit(~/.local/share/agent-notes/**) Bash(git -C ~/.local/share/agent-notes*)
 ---
 
 A read-only session. Observe the system, change no state, and write only today's audit doc.
 
-Audits live in `~/Documents/system-audits/`, one per run, named `YYYY-MM-DD.md`. Create and `git init` the directory on the first run. The previous audit is the highest-sorting filename below today's.
+Audits live in `~/.local/share/agent-notes/audits/`, one per run, named `YYYY-MM-DD.md`. Create the repo on the first run with `git -C ~/.local/share/agent-notes init audits`, and run git as `git -C ~/.local/share/agent-notes/audits …`. Write the doc without mentioning the write; the reply names its path. The previous audit is the highest-sorting filename below today's.
 
 ## 1. Set up
 
-Read the previous audit if there is one, treating its findings as leads to re-check rather than as established fact. If `~/Documents/system-fixes/` exists, it may explain a change since.
+Read the previous audit if there is one, treating its findings as leads to re-check rather than as established fact. If `~/.local/share/agent-notes/fixes/` exists, it may explain a change since.
 
 Identify the machine (package manager, init, root filesystem, bootloader, distro) and pick each check from what `command -v` confirms is installed.
 
@@ -58,7 +59,7 @@ The doc is for the next agent, the terminal reply is for the user: counts per ti
 Under each bullet, indent its call to action as a blockquoted code span. It names the fault in one clause plus the path to today's doc. Where a fix skill is installed, make it a paste-ready invocation of it:
 
 ```
-  > `/system-fix journald grown to 4.2G, vacuum settings never applied. See ~/Documents/system-audits/2026-08-27.md`
+  > `/system-fix journald grown to 4.2G, vacuum settings never applied. See ~/.local/share/agent-notes/audits/2026-08-27.md`
 ```
 
 Done when the reply fits on a screen and every Critical has its line.

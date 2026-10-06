@@ -2,7 +2,7 @@
 
 ## Onboard
 
-If the notes repo does not exist, create it, `git init` it, and add `RULES.md` and `PREFERENCES.md` empty, and `INDEX.md` with an empty map, an empty **Open** list and `Sessions since lint: 0`.
+If the notes repo does not exist, create it with `git -C ~/.local/share/agent-notes init config`, and add `RULES.md` and `PREFERENCES.md` empty, and `INDEX.md` with an empty map, an empty **Open** list and `Sessions since lint: 0`.
 
 Offer onboarding: scan the configs and their git repos to fill `INDEX.md`, and ask the user about their rules and preferences. If the user declines, add "onboarding pending" to **Open** and go on with the request. Remove it once onboarding is done.
 
