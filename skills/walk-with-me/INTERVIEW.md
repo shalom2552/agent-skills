@@ -15,11 +15,15 @@ Also ask:
 
 If a problem's latest line is `hinted` or `failed` and 3 or more days old, serve it as a **re-solve** and say so, oldest first. Otherwise pick a LeetCode-style problem not in the log, matching difficulty and topic.
 
-Write the problem to `QUESTION.md` in its task folder, with examples, and leave one constraint unstated (input size, duplicates, empty input), the way real interviews do. Answer it when asked.
-
-The problem's folder gets a stub with the function signature and the `test` script (see Intake in [`SKILL.md`](SKILL.md)). Before the user codes, write two suites in the session's `tests/`: the **examples**, the ones stated, and the **hidden** suite: edge cases, the unstated constraint, and inputs at the size limit, fixed before any solution exists.
-
 Start a timer only if asked, by writing the start time to `timer` in the session folder.
+
+## Task folder
+
+Set up as in section 2 of [`SKILL.md`](SKILL.md), with three changes:
+
+- `QUESTION.md` leaves one constraint unstated (input size, duplicates, empty input), the way real interviews do. Answer it when asked.
+- The hidden suite covers the unstated constraint too.
+- `tests/submit` appends a line to `tests/submits` on each run against the user's code, so proof runs stay out of the count.
 
 ## Phases
 
@@ -28,7 +32,7 @@ Start a timer only if asked, by writing the start time to `timer` in the session
 3. **Code**: the user writes it. Stay quiet.
 4. **Verify**: the user traces an example or tests it, then says **submit**.
 
-**run** runs the examples; **run `<input>`** runs that input and shows the output. **submit** runs the hidden suite, `test --hidden`. On a failure, show the first failing input, the expected output and the actual one, and nothing else: the user goes back to code. Count every submission. All passing goes to the critique.
+**run** runs `./<task>/run`; **run `<input>`** passes that input. **submit** runs `./<task>/submit`. On a failure, show its output and nothing else: the user goes back to code. Count submissions from `tests/submits`, the user's own runs included. All passing goes to the critique.
 
 A hint, only when asked, is the smallest nudge that unblocks. Note each one.
 

@@ -3,10 +3,10 @@ name: walk-with-me
 description: Learn languages and idioms by coding with a coach.
 argument-hint: '"idiomatic rust" or "go interview, graphs"'
 disable-model-invocation: true
-allowed-tools: Edit(./.walk/**) Bash(*/walk-with-me/snap) Bash(*/walk-with-me/snap -q) Bash(./*/test) Bash(./*/test *)
+allowed-tools: Edit(./.walk/**) Bash(*/walk-with-me/snap) Bash(*/walk-with-me/snap -q) Bash(./*/run) Bash(./*/run *) Bash(./*/submit) Bash(./*/submit *)
 ---
 
-A session where the user writes code and the agent coaches. The goal is a better programmer: idiomatic, correct code, new languages, interview readiness. The user learns by typing it, so the agent edits the user's files only when asked for that specific edit. The one exception is what it sets up in the **task folder**: `TASK.md` or `QUESTION.md`, the `test` script, an interview stub, and the summary.
+A session where the user writes code and the agent coaches. The goal is a better programmer: idiomatic, correct code, new languages, interview readiness. The user learns by typing it, so the agent edits the user's files only when asked for that specific edit. The one exception is what it sets up in the **task folder** (section 2): the spec, the scripts, an interview stub, and the summaries.
 
 ## `.walk/`
 
@@ -15,44 +15,84 @@ The agent's own directory, in the project directory, and the one place it writes
 | Path | Holds |
 |---|---|
 | `profile.md` | Intake answers. |
-| `lessons.md` | Lessons and gotchas, one line each (section 3). |
+| `lessons.md` | Lessons and gotchas, one line each (section 4). |
 | `problems.md` | Interview problems and outcomes. See [`INTERVIEW.md`](INTERVIEW.md). |
 | `git/` | Check snapshots, in a private repo. |
 | `sessions/<id>/` | One folder per session. `<id>` is the start date, with `-2`, `-3` for more that day. |
 | `sessions/<id>/log.md` | First line names the task folder. Then each point raised and question answered, written as it happens. Points are tagged `[open]`, `[fixed]` or `[deferred]`. |
-| `sessions/<id>/tests/` | The task's suites and `run`, their runner. |
+| `sessions/<id>/tests/` | The task's suites and their `run` and `submit` scripts (section 2). |
 | `sessions/<id>/lint/` | Checker output, one file per tool, overwritten each check. |
-| `sessions/<id>/scratch/` | Repros and snippet builds. |
+| `sessions/<id>/scratch/` | Repros, snippet builds, and the solutions that prove the suites. |
 
 ## 1. Intake
 
 1. Read `.walk/lessons.md` if it exists: past lessons are not taught twice, and a repeated mistake gets called out as one. Open a past summary or session log only when a point needs its detail.
-2. If the latest session log has no `Summary:` line, that session is unfinished: offer to resume it, showing its last `Next:` line, or its last logged point if it has none. Resuming continues in its folder and skips to step 8. If the user declines, write its summary (section 3) first.
-3. If `.walk/profile.md` exists, show it in one line; the user names any change. Ask the rest, with the question tool when available, skipping whatever `$ARGUMENTS`, the profile or the files already answer:
-   - Languages the user knows well.
-   - Language for today.
-   - Level in it: new, some, comfortable, or fluent. Skip it for a language they know well.
-   - Mode: **coach** or **interview**.
-   - Coach: **quick** or **deep**; what they are building; scale: one function, one file, or a small project.
-   - Interview: the extra questions in [`INTERVIEW.md`](INTERVIEW.md).
-4. Save the answers that hold across sessions to `.walk/profile.md`, not today's language or goal, and create the session folder.
-5. Set up the **task folder**: one per task, in the project, named for it (`wc-cpp/`, `two-sum/`), holding the user's code, `TASK.md` (coach) or `QUESTION.md` (interview), the `test` script and the summaries. A task can span sessions: continuing one reuses its folder, `test` and suites, and skips to step 8. In interview mode, Pick in [`INTERVIEW.md`](INTERVIEW.md) does this step and the next.
-
-   In coach mode with no goal, propose 2-3 tasks at that scale, fitting the language and level, one line each, each exercising idioms central to that language. The user picks. With a goal of their own, use their description. Write the full spec to `TASK.md`: how to run it, the input and output rules, edge cases, and one example run. The design stays the user's.
-6. Write the tests in the session's `tests/`, so the task folder stays clean. In coach mode the suite is the spec's rules and its example run; the spec's edge cases stay out of it, for the user to cover. `run` builds whatever the language needs, then runs the main suite (coach) or the examples (interview); `run --hidden` runs the hidden suite; any other arguments are input, run with the output printed. The task folder's `test` only calls it, passing its arguments on:
-
-   ```sh
-   #!/bin/sh
-   exec "$(dirname "$0")/../.walk/sessions/<id>/tests/run" "$@"
-   ```
-
-   Run it as `./<task>/test` from the project directory.
+2. If the latest session log has no `Summary:` line, that session is unfinished: offer to resume it, showing its last `Next:` line, or its last logged point if it has none. Resuming continues in its folder and skips to step 8. If the user declines, write its summary (section 4) first.
+3. If `.walk/profile.md` exists, show it in one line; the user names any change. Ask the rest in two rounds, with the question tool when available, skipping whatever `$ARGUMENTS`, the profile or the files already answer:
+   - Round 1: mode, **coach** or **interview**; language for today; level in it, new, some, comfortable, or fluent, skipped for a language they know well; languages the user knows well.
+   - Round 2, by mode. Coach: **quick** or **deep**; what they are building; scale: one function, one file, or a small project. Interview: the extra questions in [`INTERVIEW.md`](INTERVIEW.md).
+4. Save the answers that hold across sessions to `.walk/profile.md`, and create the session folder. Mode, language, level and goal are per session: they stay out of the profile.
+5. Pick the task. Coach with no goal: propose 2-3 tasks at that scale, fitting the language and level, one line each, each exercising idioms central to that language; the user picks. With a goal of their own, use their description. Interview: Pick in [`INTERVIEW.md`](INTERVIEW.md). A task can span sessions: continuing one reuses its task folder and tests, and skips to step 8.
+6. Set up the task folder and its tests (section 2).
 7. Run `snap -q` (Snapshot, below), so checks cover only the user's new work.
-8. Show the commands in one line. Coach: **check**, **check `<path>`**, **show**, **more**, **deeper**, **quick**/**deep**, **pause**, **done**. Interview: **run**, **run `<input>`**, **submit**, **hint**, **give up**, **pause**.
+8. Show the scripts in one line, `./run`, `./run <input>`, `./submit`, and the commands in the next. Coach: **check**, **check `<path>`**, **show**, **more**, **deeper**, **quick**/**deep**, **pause**, **done**. Interview: **run**, **run `<input>`**, **submit**, **hint**, **give up**, **pause**.
 
-Done when the profile is saved, the session and task folders exist, `./<task>/test` runs, the snapshot is taken, and the commands are shown. In interview mode, continue with Phases in [`INTERVIEW.md`](INTERVIEW.md).
+Done when the profile is saved, the session and task folders exist, the suites are proven, both scripts run, the snapshot is taken, and the scripts and commands are shown. In interview mode, continue with Phases in [`INTERVIEW.md`](INTERVIEW.md).
 
-## 2. Coach
+## 2. Task folder
+
+One per task, in the project, named for it (`wc-cpp/`, `two-sum/`). Interview mode changes a few things: see Task folder in [`INTERVIEW.md`](INTERVIEW.md).
+
+| File | Holds |
+|---|---|
+| The user's code | Theirs to write. In interview mode it starts as a stub with the function signature. |
+| `TASK.md` (coach), `QUESTION.md` (interview) | The spec. |
+| `run`, `submit` | The test scripts. |
+| `walk-<id>-<task>.md` | One summary per session (section 4). `<task>` is the task folder name. |
+
+### Spec
+
+Four parts. The design stays the user's.
+
+- **Problem**: what to build or solve, with its input and output rules.
+- **Examples**: 2-3, LeetCode style: `Input:`, `Output:`, and an `Explanation:` line when the rule behind it is not obvious. At least one goes past the smallest case.
+- **Constraints**: sizes and value ranges. Edge cases go unnamed: finding them is the user's job.
+- **Run**: `./run`, `./submit`, and one example run of `./run <input>`, all from the task folder.
+
+### Tests
+
+Two suites, in the session's `tests/` so the user never sees them, fixed before the user codes:
+
+- The **run suite**: the examples, and in coach mode cases that stress each rule: several items, chains, nesting, beyond the smallest input that shows it.
+- The **hidden suite**: what the spec leaves for the user to find: edge cases, values at the constraint limits, inputs at the size limit.
+
+Two scripts beside them build whatever the language needs, then:
+
+- `run`: the run suite, printing every case. With arguments, it runs them as input instead and prints the output.
+- `submit`: the run suite, then the hidden suite, stopping at the first failure. With a folder as argument, it builds the code there instead of the task folder's.
+
+Cases are numbered in suite order, the hidden suite continuing after the run suite. Each result is followed by an empty line. A pass prints the case's input. A failure also prints the expected output and the actual one. Both use the examples' notation. A hidden case prints only when it fails, so its input stays hidden until then:
+
+```
+PASS case 1
+  input:    [[1,4],[2,3]]
+
+FAIL case 2
+  input:    [[1,10],[2,3]]
+  expected: [[1,10]]
+  got:      [[1,3]]
+```
+
+The task folder's `run` and `submit` both hold this wrapper, which calls the `tests/` script of the same name. They work from any folder: the user runs `./run` in the task folder, the agent `./<task>/run` from the project directory.
+
+```sh
+#!/bin/sh
+exec "$(dirname "$0")/../.walk/sessions/<id>/tests/$(basename "$0")" "$@"
+```
+
+Prove the suites before the user codes. In `scratch/`, write a correct solution and 2-3 wrong ones, each a likely mistake for this task, and pass each one's folder to `submit`. The correct one passes. Each wrong one fails, and in coach mode one that breaks a stated rule fails on a run suite case. Add cases until all of this holds.
+
+## 3. Coach
 
 The user codes and says **check** when they want a review. **check `<path>`** reviews that file whole.
 
@@ -92,16 +132,21 @@ Done with each check when fixes are confirmed, points given and logged, and the 
 
 A question gets at most 5 lines plus a snippet. **deeper** expands the last answer. **quick** and **deep** switch the setting at any time.
 
-## 3. Pause and summary
+## 4. Pause and summary
 
 **pause** ends the session without a summary: end the log with `Next:` and the next step. The next intake offers to resume it.
 
-The summary is written when the user says **done** in coach mode, after the critique in interview mode, or at intake for an unfinished session the user does not resume. Write `walk-<id>.md` in the task folder. The user rereads it before interviews, so it is built for skimming: short sections, blank lines between blocks, code in code blocks, never a dense paragraph. Minor style lessons share one lesson. The shape:
+The summary is written when the user says **done** in coach mode, after the critique in interview mode, or at intake for an unfinished session the user does not resume. Write `walk-<id>-<task>.md` in the task folder, e.g. `walk-2026-10-05-wc-cpp.md`. The user rereads it before interviews, so it is built for skimming: short sections, blank lines between blocks, code in code blocks, never a dense paragraph. Minor style lessons share one lesson. The shape:
 
 ````markdown
 # wc-cpp, 2026-10-05
 
 `./wc <file> [N]` prints the top N words. C++17.
+
+## Complexity
+
+- Time: `O(n log n)` for n distinct words. Best known: `O(n log N)`, since `partial_sort` orders only the top N.
+- Space: `O(n)`. Best known: `O(n)`.
 
 ## Lessons
 
@@ -127,8 +172,10 @@ if (ec != std::errc{} || p != s.data() + s.size()) return std::nullopt;
 - clangd shows wrong errors without `compile_flags.txt`.
 ````
 
+**Complexity** measures the user's code as it ends the session, time and space, each against the best known. For a small project, measure its core operation.
+
 **To revisit** holds points still `[open]` or `[deferred]`, and setup trouble.
 
-Add each lesson and gotcha to `.walk/lessons.md` as one line, `rule (<task>/walk-<id>.md)`, and end the session log with `Summary: <task>/walk-<id>.md`.
+Add each lesson and gotcha to `.walk/lessons.md` as one line, `rule (<task>/walk-<id>-<task>.md)`, and end the session log with `Summary: <task>/walk-<id>-<task>.md`.
 
-Done when every point in the session log is a lesson, a gotcha, a to-revisit item, or dropped as trivial, and each lesson and gotcha has its line in `lessons.md`.
+Done when the complexity is stated, every point in the session log is a lesson, a gotcha, a to-revisit item, or dropped as trivial, and each lesson and gotcha has its line in `lessons.md`.
