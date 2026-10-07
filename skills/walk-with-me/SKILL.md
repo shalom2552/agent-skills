@@ -71,29 +71,27 @@ Two scripts beside them build whatever the language needs, then:
 - `run`: the run suite, printing every case. With arguments, it runs them as input instead and prints the output.
 - `submit`: the run suite, then the hidden suite, stopping at the first failure. With a folder as argument, it builds the code there instead of the task folder's.
 
-Cases are numbered in suite order, the hidden suite continuing after the run suite. Each result is followed by an empty line. A pass prints the case's input. A failure also prints the expected output and the actual one. Both use the examples' notation. Whatever the user's code prints during a case follows, indented, under `stdout:`, so debug prints work; it is left out when the case printed nothing. When the task is judged on stdout, that block shows stderr instead. `run <input>` shows the user's prints the same way. A hidden case prints only when it fails, so its input stays hidden until then:
+Both print plain lines, one field each, and [`report`](report), in this skill's folder, draws them as cards with a summary. Cases are numbered in suite order, the hidden suite continuing after the run suite. Values use the examples' notation:
 
 ```
-PASS case 1
-  input:    [[1,4],[2,3]]
-
-FAIL case 2
-  input:    [[1,10],[2,3]]
-  expected: [[1,10]]
-  got:      [[1,3]]
-  stdout:
-    merging [1,10] with [2,3]
-
-1/2 passed
+case 1 pass
+input [[1,4],[2,3]]
+case 2 fail
+input [[1,10],[2,3]]
+expected [[1,10]]
+got [[1,3]]
+stdout merging [1,10] with [2,3]
+case 3 hidden
+total 12
 ```
 
-The last line counts passing cases out of all cases in the suites run. In a terminal, with `NO_COLOR` unset, `PASS` is bold green, `FAIL` bold red, and the labels (`input:`, `expected:`, `got:`, `stdout:`) dim. Anywhere else, such as the agent's runs, the output stays plain.
+A case starts with `case <n> pass|fail|hidden`, then its fields, each repeated one line at a time for multi-line values. `hidden` is a passing hidden case: counted, not shown, so its input stays hidden; a failing hidden case prints like any other. A crash fails the case, with the error as `got`. Each case runs under a time limit, generous for the best known approach but tight enough that a slower complexity class fails at the size limit; a case over it fails with `got timeout`. `stdout` holds whatever the user's code printed during the case, stdout and stderr, so debug prints work; when the task is judged on stdout, it holds stderr only. `total` is the number of cases in the suites run. `run <input>` prints `output` lines and `stdout` lines instead of cases.
 
-The task folder's `run` and `submit` both hold this wrapper, which calls the `tests/` script of the same name. They work from any folder: the user runs `./run` in the task folder, the agent `./<task>/run` from the project directory.
+The task folder's `run` and `submit` both hold this wrapper, which calls the `tests/` script of the same name and pipes it to `report`. `<skill-dir>` is this skill's folder, as an absolute path. They work from any folder: the user runs `./run` in the task folder, the agent `./<task>/run` from the project directory.
 
 ```sh
 #!/bin/sh
-exec "$(dirname "$0")/../.walk/sessions/<id>/tests/$(basename "$0")" "$@"
+"$(dirname "$0")/../.walk/sessions/<id>/tests/$(basename "$0")" "$@" | <skill-dir>/report
 ```
 
 Prove the suites before the user codes. In `scratch/`, write a correct solution and 2-3 wrong ones, each a likely mistake for this task, and pass each one's folder to `submit`. The correct one passes. Each wrong one fails, and in coach mode one that breaks a stated rule fails on a run suite case. Add cases until all of this holds.

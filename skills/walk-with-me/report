@@ -1,0 +1,40 @@
+#!/bin/sh
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+  g='\033[32m' G='\033[1;32m' R='\033[1;31m' d='\033[2m' b='\033[1m' n='\033[0m'
+  pb='\033[1;30;42m' fb='\033[1;37;41m'
+fi
+awk -v g="$g" -v G="$G" -v R="$R" -v d="$d" -v b="$b" -v n="$n" -v pb="$pb" -v fb="$fb" '
+function rows(lab, lc, vc, a, c,   i, sp) {
+  sp = lab; gsub(/./, " ", sp)
+  for (i = 1; i <= c; i++) printf "%s│%s  %s%s%s%s%s%s\n", f, n, lc, (i == 1 ? lab : sp), n, vc, a[i], n
+}
+function flush() {
+  if (st == "pass") { f = g; printf "%s╭─%s %s PASS %s  case %s\n", f, n, pb, n, num }
+  else if (st == "fail") { f = R; printf "%s╭─%s %s FAIL %s  case %s\n%s│%s\n", f, n, fb, n, num, f, n }
+  else if (st == "output") { f = d; printf "%s╭─ output%s\n", f, n; rows("", "", "", out, no) }
+  if (st == "pass" || st == "fail" || st == "output") {
+    rows("input  ", d, "", inp, ni)
+    if (st == "fail") { printf "%s│%s\n", f, n; rows("- expected  ", G, G, ex, ne); rows("+ got       ", R, R, go, ng); printf "%s│%s\n", f, n }
+    if (ns) { printf "%s├─%s %sstdout%s\n", f, n, d, n; rows("", "", "", so, ns) }
+    printf "%s╰─%s\n\n", f, n
+  }
+  st = ""; ni = ne = ng = ns = no = 0
+}
+{ k = $1; v = $0; sub(/^[^ ]+ ?/, "", v) }
+k == "case"     { flush(); num = $2; st = $3; if (st == "pass" || st == "hidden") p++; else f_++ }
+k == "input"    { inp[++ni] = v }
+k == "expected" { ex[++ne] = v }
+k == "got"      { go[++ng] = v }
+k == "stdout"   { so[++ns] = v }
+k == "output"   { if (st == "") st = "output"; out[++no] = v }
+k == "total"    { total = v }
+END {
+  flush()
+  if (NR == 0) exit 1
+  if (p + f_ == 0) exit 0
+  if (total == "") total = p + f_
+  printf " %sTests:%s ", b, n
+  if (f_) printf "%s%d failed%s, ", R, f_, n
+  printf "%s%d passed%s, %d total\n", G, p, n, total
+  exit f_ > 0
+}'
