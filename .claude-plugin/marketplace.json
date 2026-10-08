@@ -1,0 +1,7 @@
+{
+  "name": "shalom2552",
+  "owner": { "name": "shalom2552" },
+  "plugins": [
+    { "name": "spinner-words", "source": "./mods/spinner-words" }
+  ]
+}
