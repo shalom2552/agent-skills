@@ -3,7 +3,7 @@ name: walk-with-me
 description: Learn languages and idioms by coding with a coach.
 argument-hint: '"idiomatic rust" or "go interview, graphs"'
 disable-model-invocation: true
-allowed-tools: Edit(./.walk/**) Bash(*/walk-with-me/snap) Bash(*/walk-with-me/snap -q) Bash(./*/run) Bash(./*/run *) Bash(./*/submit) Bash(./*/submit *)
+allowed-tools: Edit(./.walk/**) mcp__walk-with-me__mode Bash(*/walk-with-me/snap) Bash(*/walk-with-me/snap -q) Bash(./*/run) Bash(./*/run *) Bash(./*/submit) Bash(./*/submit *)
 ---
 
 A session where the user writes code and the agent coaches. The goal is a better programmer: idiomatic, correct code, new languages, interview readiness. The user learns by typing it, so the agent edits the user's files only when asked for that specific edit. The one exception is what it sets up in the **task folder** (section 2): the spec, the scripts, an interview stub, and the summaries.
@@ -183,3 +183,5 @@ if (ec != std::errc{} || p != s.data() + s.size()) return std::nullopt;
 Add each lesson and gotcha to `.walk/lessons.md` as one line, `rule (<task>/walk-<id>-<task>.md)`, and end the session log with `Summary: <task>/walk-<id>-<task>.md`.
 
 Done when the complexity is stated, every point in the session log is a lesson, a gotcha, a to-revisit item, or dropped as trivial, and each lesson and gotcha has its line in `lessons.md`.
+
+If the `mcp__walk-with-me__mode` tool exists, call it with `coach` or `interview` once intake picks the mode, and with `off` on **pause** and after the summary.

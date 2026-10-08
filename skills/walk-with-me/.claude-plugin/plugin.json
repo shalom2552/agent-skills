@@ -1,0 +1,6 @@
+{
+  "name": "walk-with-me",
+  "version": "0.1.0",
+  "description": "Band above the prompt showing the walk-with-me mode, with buttons for its commands.",
+  "types": "./types/index.d.ts"
+}
