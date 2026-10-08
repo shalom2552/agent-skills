@@ -4,6 +4,7 @@ if [ ! -d "$GIT_DIR" ]; then
   git init -q
   printf '%s\n' /.walk/ 'walk-*.md' >> "$GIT_DIR/info/exclude"
 fi
+[ -f "$GIT_DIR/.gitignore" ] || echo '*' > "$GIT_DIR/.gitignore"
 git read-tree --empty
 git add -A
 tree=$(git write-tree)
