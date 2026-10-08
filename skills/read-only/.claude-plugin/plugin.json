@@ -1,0 +1,6 @@
+{
+  "name": "read-only",
+  "version": "0.1.0",
+  "description": "Band above the prompt showing READ-ONLY or APPLY; blocks file edits while read-only.",
+  "types": "./types/index.d.ts"
+}

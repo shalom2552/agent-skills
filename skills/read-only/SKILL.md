@@ -28,3 +28,5 @@ Everything else waits for the user: writing files anywhere on the machine, `.git
 Hand a change over for the user to apply: a unified diff for multi-line edits, a snippet with `file:line` for a one-liner.
 
 An explicit ask for a specific change ("fix it", "apply that") approves that one change. Make it, then return to read-only. Anything broader needs its own yes.
+
+If the `mcp__read-only__mode` tool exists, call it with `apply` right before an approved change and with `off` when the user leaves read-only.
