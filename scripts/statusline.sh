@@ -13,6 +13,9 @@
 
 LIMIT_FLOOR=30   # below this, rate limits are noise
 HOT=85           # at/above this, show when the window resets
+BAR_CAP=300000   # context bar full at this many tokens
+CTX_WARN=100000  # context yellow from here
+CTX_HOT=200000   # context red from here
 
 input=$(cat)
 model=$(jq -r '.model.display_name // "?"' <<<"$input")
@@ -20,6 +23,7 @@ cost=$(jq -r '.cost.total_cost_usd // 0 | . * 100 | round / 100' <<<"$input")
 added=$(jq -r '.cost.total_lines_added // 0 | round' <<<"$input")
 removed=$(jq -r '.cost.total_lines_removed // 0 | round' <<<"$input")
 ctx_pct=$(jq -r '.context_window.used_percentage // empty | round' <<<"$input")
+ctx_size=$(jq -r '.context_window.context_window_size // empty' <<<"$input")
 ctx_used=$(jq -r '.context_window.total_input_tokens // empty | round' <<<"$input")
 lim5=$(jq -r '.rate_limits.five_hour.used_percentage // empty | round' <<<"$input")
 lim7=$(jq -r '.rate_limits.seven_day.used_percentage // empty | round' <<<"$input")
@@ -38,12 +42,21 @@ heat() {
     fi
 }
 
-# gauge <pct> <cells> -> heat-colored filled cells, dim empty cells
+# context color by tokens in context
+ctx_heat() {
+    local t=$1
+    if   (( t >= CTX_HOT ));  then printf '\033[31m'
+    elif (( t >= CTX_WARN )); then printf '\033[33m'
+    else                           printf '\033[32m'
+    fi
+}
+
+# gauge <pct> <cells> [color] -> colored filled cells (heat by default), dim empty cells
 gauge() {
-    local pct=$1 cells=$2 i filled
+    local pct=$1 cells=$2 color=${3:-$(heat "$1")} i filled
     filled=$(( (pct * cells + 99) / 100 ))       # round up, so 1% still shows a tick
     (( filled > cells )) && filled=$cells
-    printf '%b' "$(heat "$pct")"
+    printf '%b' "$color"
     for (( i = 0; i < filled; i++ )); do printf '▰'; done
     printf '\033[0m\033[2m'
     for (( i = filled; i < cells; i++ )); do printf '▱'; done
@@ -105,7 +118,11 @@ segments+=( "$head" )
 if [[ -n "$ctx_pct" ]]; then
     tokens=""
     [[ -n "$ctx_used" ]] && tokens=$(printf '\033[2m%s\033[0m ' "$(human "$ctx_used")")
-    segments+=( "$(printf '%s%s %b%s%%\033[0m' "$tokens" "$(gauge "$ctx_pct" 8)" "$(heat "$ctx_pct")" "$ctx_pct")" )
+    bar_pct=$ctx_pct
+    [[ -n "$ctx_size" ]] && bar_pct=$(( ctx_pct * ctx_size / BAR_CAP ))
+    ctx_tok=$(( ctx_pct * ${ctx_size:-0} / 100 ))
+    color=$(ctx_heat "$ctx_tok")
+    segments+=( "$(printf '%s%s %b%s%%\033[0m' "$tokens" "$(gauge "$bar_pct" 8 "$color")" "$color" "$ctx_pct")" )
 fi
 
 segments+=( "$(printf '\033[33m$%s\033[0m' "$cost")" )
