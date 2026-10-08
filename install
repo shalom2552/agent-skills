@@ -2,6 +2,8 @@
 #
 # Extend: add an ASSET_TYPES row, or define scope_root_<name> /
 # mode_install_<name> with its mode_state_<name> up-to-date test.
+# A type installed by something other than files defines type_install_<type>
+# and type_state_<type>, and ignores mode.
 # A trailing `return 0` keeps a falsy last test from tripping set -e.
 
 set -euo pipefail
@@ -19,6 +21,8 @@ readonly MARKER=".agent-skills-install"
 readonly DEFAULT_SCOPE="project"
 readonly DEFAULT_MODE="copy"
 
+readonly MARKETPLACE="shalom2552"   # Claude Code reserves "agent-skills"
+
 readonly SOURCE_HOME="${AGENT_SKILLS_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-skills}"  # links point here, so data not cache
 readonly REPO_URL="${AGENT_SKILLS_REPO:-$CLONE_URL}"
 readonly INSTALLER_ID="$REPO_URL"
@@ -27,6 +31,7 @@ readonly INSTALLER_ID="$REPO_URL"
 readonly ASSET_TYPES=(
   "skills|skills|skills|*/|SKILL.md"
   "scripts|scripts|scripts|*.sh|."
+  "mods|mods|-|*/|.claude-plugin/plugin.json"
 )
 
 TTY_FD=0  # prompts read /dev/tty so they survive curl | bash
@@ -61,6 +66,10 @@ MENU_TAGW=0
 TRUNC=""
 PICK=""
 ENTRY_STATE=""
+PLUGINS=""             # `claude plugin list --json`, one object per line, read once
+MARKETPLACE_ADDED=0
+PLUGIN_ERR=""
+FOREIGN=0              # a blocked entry that --force would replace
 
 cleanup() {
   [[ -t 1 ]] && printf '\033[?25h' >&2
@@ -169,7 +178,7 @@ truncate_to() {
 
 status_glyph() {
   case "$1" in
-    linked|copied|updated) printf '%s+%s' "$C_GREEN" "$C_RESET" ;;
+    linked|copied|updated|installed) printf '%s+%s' "$C_GREEN" "$C_RESET" ;;
     current)               printf '%s=%s' "$C_DIM" "$C_RESET" ;;
     blocked)               printf '%s!%s' "$C_YELLOW" "$C_RESET" ;;
     *)                     printf ' ' ;;
@@ -217,10 +226,10 @@ status_line() {
 }
 
 summary() {
-  local order=(linked updated copied current blocked) status total=0 line
+  local order=(linked updated copied installed current blocked) status total=0 line
   local -A titles=([current]="up to date")
   local -A tints=([linked]="$C_GREEN" [updated]="$C_GREEN" [copied]="$C_GREEN" \
-                  [current]="$C_DIM" [blocked]="$C_YELLOW")
+                  [installed]="$C_GREEN" [current]="$C_DIM" [blocked]="$C_YELLOW")
   rule
   for status in "${order[@]}"; do
     line="$(status_line "$status")"
@@ -233,7 +242,7 @@ summary() {
   elif (( total )); then    note "$total entries total"
   else                      log "nothing to do"
   fi
-  (( ${COUNTS[blocked]:-0} )) && note "blocked entries exist and were not created by install; --force replaces them"
+  (( FOREIGN )) && note "blocked entries exist and were not created by install; --force replaces them"
   return 0
 }
 
@@ -303,8 +312,9 @@ describe_entry() {
   local meta="$1"
   [[ -f "$meta" ]] || return 0
   head -n 20 -- "$meta" \
-    | grep -m1 '^description:' \
-    | sed -e 's/^description:[[:space:]]*//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+    | grep -m1 -E '^[[:space:]]*"?description"?:' \
+    | sed -e 's/^[[:space:]]*"\{0,1\}description"\{0,1\}:[[:space:]]*//' -e 's/^\(".*"\),$/\1/' \
+          -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
     || true
 }
 
@@ -476,6 +486,7 @@ may_replace() {
     menu_clear 2                        # the question and its blank line go with the menu
     (( allow )) && return 0
   fi
+  FOREIGN=1
   emit blocked "$label" "not ours"
   return 1
 }
@@ -500,7 +511,11 @@ mode_state_copy() { [[ ! -L "$2" ]] && same_content "$1" "$2"; }
 
 # sets ENTRY_STATE: new, current, outdated or foreign
 entry_state() {
-  local src="$1" dest="$2"
+  local src="$1" dest="$2" type="${3:-}"
+  if [[ -n "$type" ]] && declare -F "type_state_${type}" >/dev/null; then
+    "type_state_${type}" "$src" "$(basename -- "$src")"
+    return 0
+  fi
   ENTRY_STATE="new"
   [[ -e "$dest" || -L "$dest" ]] || return 0
   if ! owned_by_installer "$dest"; then
@@ -572,6 +587,70 @@ mode_install_copy() {
   [[ -d "$dest" ]] || write_marker "$dest" "$src"
 
   emit "$status" "$label"
+}
+
+project_path() { abspath "${PROJECT_DIR:-$PWD}"; }
+
+# claude has no --dest; global and project map to its user and project scopes
+plugin_scope() {
+  [[ -z "$DEST_OVERRIDE" ]] || return 1
+  case "$SCOPE" in
+    global)  printf 'user' ;;
+    project) printf 'project' ;;
+    *)       return 1 ;;
+  esac
+}
+
+plugins_json() {
+  [[ -n "$PLUGINS" ]] \
+    || PLUGINS="$(claude plugin list --json 2>/dev/null | tr -d '\n' | sed 's/}[[:space:]]*,[[:space:]]*{/}\n{/g')"
+  printf '%s\n' "$PLUGINS"
+}
+
+# sets PLUGIN_ERR to the last line claude printed when it fails
+plugin_cmd() {
+  local out
+  if (( DRY_RUN )); then dry claude plugin "$@"; return 0; fi
+  out="$(cd -- "$(project_path)" && claude plugin "$@" 2>&1)" && return 0
+  PLUGIN_ERR="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 || true)"
+  PLUGIN_ERR="${PLUGIN_ERR##*✘ }"
+  return 1
+}
+
+# installed from a marketplace that points elsewhere reads as outdated
+type_state_mods() {
+  local src="$1" entry="$2" scope obj
+  ENTRY_STATE="new"
+  command -v claude >/dev/null && scope="$(plugin_scope)" || return 0
+  while IFS= read -r obj; do
+    [[ "$obj" == *"\"id\": \"$entry@$MARKETPLACE\""* && "$obj" == *"\"scope\": \"$scope\""* ]] || continue
+    [[ "$scope" == user || "$obj" == *"\"projectPath\": \"$(project_path)\""* ]] || continue
+    if [[ "$obj" == *"\"readFromFolder\": \"$src\""* ]]; then ENTRY_STATE="current"; else ENTRY_STATE="outdated"; fi
+  done < <(plugins_json)
+  return 0
+}
+
+# the repo is a directory marketplace, so claude reads each mod in place
+type_install_mods() {
+  local src="$1" entry="$2" scope status
+  command -v claude >/dev/null || { emit blocked "$entry" "claude not found"; return 0; }
+  scope="$(plugin_scope)" || { emit blocked "$entry" "mods take --scope, not --dest"; return 0; }
+
+  type_state_mods "$src" "$entry"
+  if [[ "$ENTRY_STATE" == current ]]; then
+    emit current "$entry" "up to date"
+    return 0
+  fi
+
+  if (( ! MARKETPLACE_ADDED )); then
+    plugin_cmd marketplace add "$REPO_ROOT" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+    MARKETPLACE_ADDED=1
+  fi
+  plugin_cmd install "$entry@$MARKETPLACE" --scope "$scope" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+
+  status="installed"
+  [[ "$ENTRY_STATE" == new ]] || status="updated"
+  emit "$status" "$entry"
 }
 
 hide_cursor() { CURSOR_HIDDEN=1; printf '\033[?25l' >&2; }
@@ -942,7 +1021,7 @@ pick_entries() {
       MENU_SIZE[group]=0
     fi
     desc="$(describe_entry "$(meta_path "$src" "$meta")")"
-    entry_state "$src" "$root/$dest_rel/$entry"
+    entry_state "$src" "$root/$dest_rel/$entry" "$type"
     [[ "$ENTRY_STATE" == current && -n "${PENDING[$type/$entry]+x}" ]] && ENTRY_STATE="${PENDING[$type/$entry]}"
     case "$ENTRY_STATE" in
       removed)  tag="removed upstream"; tagc="$C_RED" ;;
@@ -1089,6 +1168,10 @@ install_entries() {
       EMIT_TYPES+=("$type")
       printf '\n  %s%s%s%s\n' "$C_BOLD" "$C_BLUE" "$type" "$C_RESET"
     fi
+    if declare -F "type_install_${type}" >/dev/null; then
+      "type_install_${type}" "$src" "$entry"
+      continue
+    fi
     dest_dir="$root/$dest_rel"
     if [[ -z "${made[$dest_dir]+x}" ]]; then
       run mkdir -p -- "$dest_dir"
@@ -1173,6 +1256,8 @@ EOF
     printf '  %-10s %s\n' "$name" "$("mode_help_${name}" 2>/dev/null || true)"
   done < <(registered "mode_install_")
   cat <<EOF
+  Mods ignore mode: claude reads them in place, from the $MARKETPLACE
+  marketplace this repo is added as.
 
 ENVIRONMENT
   AGENT_SKILLS_REPO     Clone URL, overriding CLONE_URL in this script
@@ -1185,6 +1270,7 @@ EXAMPLES
   $ ./install system-audit -y
   $ ./install skills/system-audit -y --scope global --mode link
   $ ./install skills -y --dry-run
+  $ ./install mods -y --scope global
 EOF
 }
 
