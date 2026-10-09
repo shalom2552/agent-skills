@@ -6,7 +6,7 @@ disable-model-invocation: true
 allowed-tools: Edit(./.walk/**) mcp__walk-with-me__mode Bash(*/walk-with-me/snap) Bash(*/walk-with-me/snap -q) Bash(./*/run) Bash(./*/run *) Bash(./*/submit) Bash(./*/submit *)
 ---
 
-A session where the user writes code and the agent coaches. The goal is a better programmer: idiomatic, correct code, new languages, interview readiness. The user learns by typing it, so the agent edits the user's files only when asked for that specific edit. The one exception is what it sets up in the **task folder** (section 2): the spec, the scripts, an interview stub, and the summaries.
+A session where the user writes code and the agent coaches. The goal is a better programmer: idiomatic, correct, well-designed code, new languages, interview readiness. The user learns by typing it, so the agent edits the user's files only when asked for that specific edit. The one exception is what it sets up in the **task folder** (section 2): the spec, the scripts, an interview stub, and the summaries.
 
 ## `.walk/`
 
@@ -15,6 +15,7 @@ The agent's own directory, in the project directory, and the one place it writes
 | Path | Holds |
 |---|---|
 | `profile.md` | Intake answers. |
+| `preferences.md` | What the user asked the agent to remember, one line each. |
 | `lessons.md` | Lessons and gotchas, one line each (section 4). |
 | `problems.md` | Interview problems and outcomes. See [`INTERVIEW.md`](INTERVIEW.md). |
 | `git/` | Check snapshots, in a private repo. |
@@ -26,7 +27,7 @@ Throwaway files, checker output, repros, snippet builds and suite proofs, go in 
 
 ## 1. Intake
 
-1. Read `.walk/lessons.md` if it exists: past lessons are not taught twice, and a repeated mistake gets called out as one. Open a past summary or session log only when a point needs its detail.
+1. Read `.walk/lessons.md` and `.walk/preferences.md` if they exist: past lessons are not taught twice, a repeated mistake gets called out as one, and preferences are followed, not shown. Open a past summary or session log only when a point needs its detail.
 2. If the latest session log has no `Summary:` line, that session is unfinished: offer to resume it, showing its last `Next:` line, or its last logged point if it has none. Resuming continues in its folder and skips to step 7. If the user declines, write its summary (section 4) first.
 3. If `.walk/profile.md` exists, show it in one line; the user names any change. Ask the rest in two rounds, with the question tool when available, skipping whatever `$ARGUMENTS`, the profile or the files already answer:
    - Round 1: mode, **coach** or **interview**; language for today; level in it, new, some, comfortable, or fluent, skipped for a language they know well; languages the user knows well.
@@ -52,10 +53,10 @@ One per task, in the project, named for it (`wc-cpp/`, `two-sum/`). Interview mo
 
 ### Spec
 
-Four parts. The design stays the user's.
+Four parts, with no design: the user picks it and the coach critiques it.
 
 - **Problem**: what to build or solve, with its input and output rules.
-- **Examples**: 2-3, LeetCode style: `Input:`, `Output:`, and an `Explanation:` line when the rule behind it is not obvious. At least one goes past the smallest case.
+- **Examples**: 1-3, LeetCode style: `Input:`, `Output:`, and an `Explanation:` line when the rule behind it is not obvious. At least one goes past the smallest case. When one example shows the task, give one.
 - **Constraints**: sizes and value ranges. Edge cases go unnamed: finding them is the user's job.
 - **Run**: `./run`, `./submit`, and one example run of `./run <input>`, all from the task folder.
 
@@ -116,9 +117,14 @@ Add the project's build output to `.walk/git/info/exclude`: build folders, objec
    - `file:line`, the enclosing symbol, and the problem, one line.
    - Why it matters, one line, naming its source for an idiom: the lint rule (`clippy::needless_range_loop`) or the official guide (PEP 8, Effective Go, Kotlin conventions).
    - A short snippet of the idiomatic form, the changed lines only. In **deep**, held back until **show**.
-4. List `[open]` points the user left untouched in one line: `Still open: a.rs:12, b.rs:4`.
-5. With more found than shown, end with `N more, say more.` and log them as `[deferred]`. **more** gives the next ones in the same format. A clean check is one line saying so.
-6. In **deep**, add one **predict** question before the `N more` line: what a line of the user's code does in a case they may not have considered (output, error, panic). Once the user answers, run it in scratch and show the result.
+4. Weigh the **design** of the code as a whole, not just the diff, and give at most one design note, outside the 3-point cap: the change with the most leverage on the code still to come. Look at where state lives, how errors flow, what each function owns, how parts split, and any structural move the user just made (moved declarations, a new type, a renaming). The note is:
+   - The shape now and a better one, one line each, with the trade-off: what the change buys and what it costs.
+   - Judged against the conventions the user's code already follows. Where those are silent and well-known guides for the language split, name each camp with its rule instead of a better shape, and the camp the code follows: any camp held consistently is fine.
+   - A sketch: types and signatures, no bodies. In **deep**, held back until **show**.
+   Log it as a point, raised once: when the user keeps their shape, log it `[dropped]`. With no better shape and no split, skip it.
+5. List `[open]` points the user left untouched in one line: `Still open: a.rs:12, b.rs:4`.
+6. With more found than shown, end with `N more, say more.` and log them as `[deferred]`. **more** gives the next ones in the same format. A clean check is one line saying so.
+7. In **deep**, add one **predict** question before the `N more` line: what a line of the user's code does in a case they may not have considered (output, error, panic). Once the user answers, run it in scratch and show the result.
 
 Snippets get the same scrutiny as the user's fixes. Before showing them, apply them all to a copy of the code in scratch and build or run it: they must work with the code as it stands and with each other, and keep every fixed point fixed.
 
@@ -130,7 +136,7 @@ A mistake that matches a line in `.walk/lessons.md` is a **repeat**: name the le
 
 When the language is not one the user knows well, hunt **gotchas**: habits carried over from a language they know that mean something else here (Java classes are open by default, Kotlin classes are final). Name the source language in the point.
 
-Done with each check when fixes are confirmed, points given and logged, and the snapshot updated.
+Done with each check when fixes are confirmed, points given and logged, the design weighed, and the snapshot updated.
 
 ### Questions
 
