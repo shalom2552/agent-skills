@@ -1,16 +1,23 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
-import type { BeatTurn } from '../types'
+import type { BeatTokens, BeatTurn } from '../types'
 
 const turns = atom({ plugin: 'beat', key: 'turns' } as const, [])
 
 const MAX_TURNS = 200
+const MAX_SESSIONS = 50
+const STORE_VERSION = 1
+const SESSIONS_KEY = 'sessions'
+const TURNS_PREFIX = 'turns:'
 const BAR = 12
+const MARGIN = 2
+const GAP = 1
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const PILL_BG = '#313244'
 const PILL_FG = '#cdd6f4'
+const STAT_COLOR = '#89b4fa'
 
 type Part = 'think' | 'tools' | 'write' | 'other'
 const PARTS: readonly { part: Part; icon: string; color: string }[] = [
@@ -26,6 +33,74 @@ export const formatDuration = (ms: number) => {
   const m = Math.floor(s / 60)
   if (m < 60) return `${m}m ${s % 60}s`
   return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+const widthOf = (s: string) => [...s].length
+
+export const formatTokens = (n: number) => {
+  if (n < 1_000) return `${n}`
+  if (n < 999_950) return `${Number((n / 1_000).toFixed(1))}k`
+  return `${Number((n / 1_000_000).toFixed(1))}M`
+}
+
+export const tokensOf = (usage: ModelUsage): BeatTokens => ({
+  input: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+  output: usage.output_tokens,
+  cacheRead: usage.cache_read_input_tokens,
+})
+
+export type Stat = { key: string; parts: readonly (readonly [icon: string, value: string])[] }
+
+export const statsOf = (turn: BeatTurn): Stat[] => {
+  const stats: Stat[] = []
+  if (turn.tokens !== undefined) {
+    stats.push({ key: 'io', parts: [['↑', formatTokens(turn.tokens.input)], ['↓', formatTokens(turn.tokens.output)]] })
+    if (turn.tokens.input > 0) stats.push({ key: 'cache', parts: [['\uf1c0 ', `${Math.round((turn.tokens.cacheRead / turn.tokens.input) * 100)}%`]] })
+  }
+  if (turn.costUsd !== undefined) stats.push({ key: 'cost', parts: [['$', turn.costUsd.toFixed(2)]] })
+  if (turn.contextPercent !== undefined) stats.push({ key: 'context', parts: [['\uf2db ', `${Math.round(turn.contextPercent)}%`]] })
+  return stats
+}
+
+export const pillWidthOf = (stats: readonly Stat[]) =>
+  stats.length === 0
+    ? 0
+    : widthOf(CAP_LEFT + CAP_RIGHT) +
+      stats.reduce((a, s) => a + s.parts.reduce((b, [icon, value]) => b + widthOf(icon + value), 0) + s.parts.length - 1, 0) +
+      2 * (stats.length - 1)
+
+export const fitStats = (stats: readonly Stat[], room: number) => {
+  let kept = [...stats]
+  while (kept.length > 0 && pillWidthOf(kept) > room) kept = kept.slice(0, -1)
+  return kept
+}
+
+const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+
+export const storedTurnsOf = (raw: unknown): BeatTurn[] => {
+  if (typeof raw !== 'object' || raw === null) return []
+  const list: unknown = Reflect.get(raw, 'turns')
+  return Reflect.get(raw, 'version') === STORE_VERSION && Array.isArray(list) ? list : []
+}
+
+export const keptSessionsOf = (raw: unknown, id: string) =>
+  [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
+
+const load = async ($: EngineInterface, cache: Map<string, BeatTurn[]>, id: string) => {
+  const cached = cache.get(id)
+  if (cached !== undefined) return cached
+  const list = storedTurnsOf(await settled($.store.get(TURNS_PREFIX + id)))
+  cache.set(id, list)
+  return list
+}
+
+const persist = async ($: EngineInterface, id: string, list: readonly BeatTurn[]) => {
+  await $.store.set(TURNS_PREFIX + id, { version: STORE_VERSION, turns: list })
+  const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
+  await $.store.set(SESSIONS_KEY, kept)
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(TURNS_PREFIX) && !kept.includes(key.slice(TURNS_PREFIX.length))) await $.store.delete(key)
+  }
 }
 
 export const unionMs = (spans: readonly (readonly [number, number])[]) => {
@@ -86,17 +161,20 @@ export const cellsOf = (values: readonly number[], width: number) => {
 
 export const register: Register = on => {
   let turnStart = 0
+  let costStart: number | undefined
   let think: [number, number][] = []
   let write: [number, number][] = []
   let tools: [number, number][] = []
+  const stored = new Map<string, BeatTurn[]>()
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await update($, turns, () => [])
+    if (e.reason === 'clear' || e.reason === 'resume') await update($, turns, () => [])
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
     turnStart = await $.clock.now()
+    costStart = (await settled($.session.usage()))?.cost?.usd
     think = []
     write = []
     tools = []
@@ -137,39 +215,88 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) {
-      const turn: BeatTurn = partsOf(e.durationMs, (await $.clock.now()) - turnStart, think, write, tools)
+      const wallMs = (await $.clock.now()) - turnStart
+      const session = await settled($.session.usage())
+      const costEnd = session?.cost?.usd
+      const contextPercent = session?.context.percent
+      const turn: BeatTurn = {
+        ...partsOf(e.durationMs, wallMs, think, write, tools),
+        ...(e.usage === undefined ? {} : { tokens: tokensOf(e.usage) }),
+        ...(costStart === undefined || costEnd === undefined ? {} : { costUsd: Math.max(0, costEnd - costStart) }),
+        ...(contextPercent === undefined ? {} : { contextPercent }),
+      }
       await update($, turns, list => [...list, turn].slice(-MAX_TURNS))
+      const id = await settled($.session.id())
+      if (id !== undefined) {
+        const list = [...(await load($, stored, id)), turn].slice(-MAX_TURNS)
+        stored.set(id, list)
+        await settled(persist($, id, list))
+      }
     }
     return done
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    const list = await read($, turns)
-    const hit = [...list].reverse().find(t => t.durationMs === e.props.durationMs)
+    const match = (list: readonly BeatTurn[]) => [...list].reverse().find(t => t.durationMs === e.props.durationMs)
+    let hit = match(await read($, turns))
+    if (hit === undefined) {
+      const id = await settled($.session.id())
+      if (id !== undefined) hit = match(await load($, stored, id))
+    }
     const values = secondsOf(hit === undefined ? [0, 0, 0, 0] : [hit.think, hit.tools, hit.write, hit.other])
     const cells = cellsOf(values, BAR)
     const shown = PARTS.map((p, i) => ({ ...p, seconds: values[i] ?? 0, cells: cells[i] ?? 0 })).filter(p => p.cells > 0)
+    const time = formatDuration(e.props.durationMs)
+    const legends = shown.map(p => ({ ...p, head: `  ${p.icon} `, tail: formatDuration(p.seconds * 1000) }))
+
+    const timeWidth =
+      widthOf(CAP_LEFT + time + CAP_RIGHT) +
+      (shown.length > 0 ? 1 + shown.reduce((a, p) => a + p.cells, 0) + legends.reduce((a, p) => a + widthOf(p.head + p.tail), 0) : 0)
+    const all = hit === undefined ? [] : statsOf(hit)
+    const columns = e.viewport?.columns
+    const stats = columns === undefined ? all : fitStats(all, columns - 2 * MARGIN - timeWidth - GAP)
 
     return (
-      <Box flexDirection="row" marginTop={1} marginLeft={2}>
-        <Text color={PILL_BG}>{CAP_LEFT}</Text>
-        <Text backgroundColor={PILL_BG} color={PILL_FG} bold>
-          {formatDuration(e.props.durationMs)}
-        </Text>
-        {shown.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
-        {shown.map(p => (
-          <Text key={`bar-${p.part}`} backgroundColor={PILL_BG} color={p.color}>
-            {'━'.repeat(p.cells)}
+      <Box flexDirection="row" marginTop={1} marginLeft={MARGIN} marginRight={MARGIN}>
+        <Box flexDirection="row" flexShrink={0}>
+          <Text color={PILL_BG}>{CAP_LEFT}</Text>
+          <Text backgroundColor={PILL_BG} color={PILL_FG} bold>
+            {time}
           </Text>
-        ))}
-        {shown.map(p => (
-          <Text key={`legend-${p.part}`} backgroundColor={PILL_BG}>
-            <Text color={p.color}>{`  ${p.icon} `}</Text>
-            <Text color={PILL_FG}>{formatDuration(p.seconds * 1000)}</Text>
-          </Text>
-        ))}
-        <Text color={PILL_BG}>{CAP_RIGHT}</Text>
+          {shown.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
+          {shown.map(p => (
+            <Text key={`bar-${p.part}`} backgroundColor={PILL_BG} color={p.color}>
+              {'━'.repeat(p.cells)}
+            </Text>
+          ))}
+          {legends.map(p => (
+            <Text key={`legend-${p.part}`} backgroundColor={PILL_BG}>
+              <Text color={p.color}>{p.head}</Text>
+              <Text color={PILL_FG}>{p.tail}</Text>
+            </Text>
+          ))}
+          <Text color={PILL_BG}>{CAP_RIGHT}</Text>
+        </Box>
+        {stats.length > 0 && <Box flexGrow={1} minWidth={GAP} />}
+        {stats.length > 0 && (
+          <Box flexDirection="row" flexShrink={0}>
+            <Text color={PILL_BG}>{CAP_LEFT}</Text>
+            {stats.map((stat, i) => (
+              <Text key={stat.key} backgroundColor={PILL_BG}>
+                {i > 0 && '  '}
+                {stat.parts.map(([icon, value], j) => (
+                  <Text key={`${stat.key}-${j}`}>
+                    {j > 0 && ' '}
+                    <Text color={STAT_COLOR}>{icon}</Text>
+                    <Text color={PILL_FG}>{value}</Text>
+                  </Text>
+                ))}
+              </Text>
+            ))}
+            <Text color={PILL_BG}>{CAP_RIGHT}</Text>
+          </Box>
+        )}
       </Box>
     )
   })

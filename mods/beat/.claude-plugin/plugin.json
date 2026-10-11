@@ -1,7 +1,7 @@
 {
   "name": "beat",
-  "version": "0.1.0",
-  "description": "Turn time as a pill split into think, tools and write.",
+  "version": "0.2.1",
+  "description": "Turn time and usage as pills.",
   "author": {
     "name": "shalom2552"
   },
