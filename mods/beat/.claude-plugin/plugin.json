@@ -1,0 +1,9 @@
+{
+  "name": "beat",
+  "version": "0.1.0",
+  "description": "Turn time as a pill split into think, tools and write.",
+  "author": {
+    "name": "shalom2552"
+  },
+  "types": "./types/index.d.ts"
+}

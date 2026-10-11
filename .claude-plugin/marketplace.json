@@ -5,5 +5,6 @@
     { "name": "spinner-words", "source": "./mods/spinner-words" },
     { "name": "tape", "source": "./mods/tape" },
     { "name": "frame", "source": "./mods/frame" },
+    { "name": "beat", "source": "./mods/beat" }
   ]
 }
