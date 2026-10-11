@@ -27,7 +27,24 @@ Or clone and run `./install`. See `./install --help` for options.
 
 `scripts/statusline.sh` - status line for Claude Code.
 
-Run `setup-sh25-skills` to wire `statusLine`.
+Installing it also sets `statusLine`, from `scripts/statusline.settings.json`.
+
+## Settings
+
+Small JSON files that `./install` merges into the scope's `settings.json`, so no hand edits.
+
+- `settings/<name>.json` stands alone.
+- `<stem>.settings.json` beside a skill or script is bound to it and applies each time that entry installs. `{{path}}` in it becomes the entry's installed path.
+
+```sh
+./install settings --scope global -y
+```
+
+To add a setting, add a file. To remove one, delete the file and re-run `./install`. Only settings still holding the installed values are removed; one you changed by hand stays. Needs `jq`.
+
+| Setting | Description |
+| --- | --- |
+| `tmux-truecolor` | Truecolor inside tmux, so mod hex colors render right. |
 
 ## Mods
 

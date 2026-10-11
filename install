@@ -32,6 +32,7 @@ readonly ASSET_TYPES=(
   "skills|skills|skills|*/|SKILL.md"
   "scripts|scripts|scripts|*.sh|."
   "mods|mods|-|*/|.claude-plugin/plugin.json"
+  "settings|settings|settings|*.json|."
 )
 
 TTY_FD=0  # prompts read /dev/tty so they survive curl | bash
@@ -70,6 +71,9 @@ PLUGINS=""             # `claude plugin list --json`, one object per line, read 
 MARKETPLACE_ADDED=0
 PLUGIN_ERR=""
 FOREIGN=0              # a blocked entry that --force would replace
+LAST_STATUS=""         # what the last emit reported
+CLASH=""               # settings keys a fragment would overwrite, comma separated
+BOUND=""               # an entry's <stem>.settings.json, empty when it has none
 
 cleanup() {
   [[ -t 1 ]] && printf '\033[?25h' >&2
@@ -181,6 +185,7 @@ status_glyph() {
     linked|copied|updated|installed) printf '%s+%s' "$C_GREEN" "$C_RESET" ;;
     current)               printf '%s=%s' "$C_DIM" "$C_RESET" ;;
     blocked)               printf '%s!%s' "$C_YELLOW" "$C_RESET" ;;
+    removed)               printf '%s-%s' "$C_RED" "$C_RESET" ;;
     *)                     printf ' ' ;;
   esac
 }
@@ -193,6 +198,7 @@ EMIT_TYPES=()
 
 emit() {
   local status="$1" label="$2" detail="${3:-}"
+  LAST_STATUS="$status"
   COUNTS["$status"]=$(( ${COUNTS["$status"]:-0} + 1 ))
   [[ -n "$EMIT_TYPE" ]] \
     && TYPE_COUNTS["$EMIT_TYPE|$status"]=$(( ${TYPE_COUNTS["$EMIT_TYPE|$status"]:-0} + 1 ))
@@ -202,6 +208,17 @@ emit() {
     printf '    %s %-*s %s%s%s\n' \
       "$(status_glyph "$status")" "$LABEL_WIDTH" "$label" "$C_DIM" "$detail" "$C_RESET"
   fi
+}
+
+emit_as() {
+  EMIT_TYPE="$1"
+  [[ " ${EMIT_TYPES[*]-} " == *" $1 "* ]] || EMIT_TYPES+=("$1")
+  return 0
+}
+
+type_heading() {
+  emit_as "$1"
+  printf '\n  %s%s%s%s\n' "$C_BOLD" "$C_BLUE" "$1" "$C_RESET"
 }
 
 plural() {
@@ -226,10 +243,10 @@ status_line() {
 }
 
 summary() {
-  local order=(linked updated copied installed current blocked) status total=0 line
+  local order=(linked updated copied installed removed current blocked) status total=0 line
   local -A titles=([current]="up to date")
   local -A tints=([linked]="$C_GREEN" [updated]="$C_GREEN" [copied]="$C_GREEN" \
-                  [installed]="$C_GREEN" [current]="$C_DIM" [blocked]="$C_YELLOW")
+                  [installed]="$C_GREEN" [removed]="$C_RED" [current]="$C_DIM" [blocked]="$C_YELLOW")
   rule
   for status in "${order[@]}"; do
     line="$(status_line "$status")"
@@ -477,11 +494,16 @@ may_replace() {
   local dest="$1" label="$2"
   [[ -e "$dest" || -L "$dest" ]] || return 0
   owned_by_installer "$dest" && return 0
+  may_take "$label" "$label exists and was not installed by install"
+}
+
+may_take() {
+  local label="$1" why="$2"
   (( FORCE )) && return 0
   if (( INTERACTIVE )) && (( ! DRY_RUN )); then
     local allow=0
     printf '\n'
-    note "$label exists and was not installed by install"
+    note "$why"
     confirm "replace it?" "no" && allow=1
     menu_clear 2                        # the question and its blank line go with the menu
     (( allow )) && return 0
@@ -651,6 +673,206 @@ type_install_mods() {
   status="installed"
   [[ "$ENTRY_STATE" == new ]] || status="updated"
   emit "$status" "$entry"
+}
+
+# shellcheck disable=SC2016 # jq variables, not shell ones
+readonly SETTINGS_JQ='
+def leafpaths: paths(type != "object") | select(all(.[]; type == "string"));
+def objpaths: paths(type == "object") | select(all(.[]; type == "string"));
+def at($p): try getpath($p) catch null;
+def drop($p): . as $o | try delpaths([$p]) catch $o;
+def one_object: if length == 1 and (.[0] | type) == "object" then .[0] else error("not one JSON object") end;
+def holds($f): . as $s | all($f | leafpaths; . as $p | ($s | at($p)) == ($f | getpath($p)));
+def clashes($f): . as $s
+  | [$f | paths | select(all(.[]; type == "string")) | . as $p
+     | ($f | getpath($p)) as $want | ($s | at($p)) as $have
+     | select($have != null and (if ($want | type) == "object" then ($have | type) != "object" else $have != $want end))
+     | join(".")];
+def removable($rec): . as $s   # a top-level key goes only while all of it still holds
+  | [$rec | leafpaths] | group_by(.[0])
+  | map(select(all(.[]; . as $p | ($s | at($p)) == ($rec | getpath($p))))) | add // [];
+def apply($old; $new): removable($old) as $gone
+  | . * $new
+  | reduce ($gone[] | select(. as $p | ($new | at($p)) == null)) as $p (.; drop($p))
+  | reduce ([$old | objpaths] | sort_by(-length))[] as $p (.;
+      if at($p) == {} and ($new | at($p)) == null then delpaths([$p]) else . end);
+'
+
+settings_read() {
+  [[ -e "$1" ]] || { printf '{}\n'; return 0; }
+  jq -s "$SETTINGS_JQ"'if length == 0 then {} else one_object end' "$1" 2>/dev/null
+}
+
+settings_render() {
+  jq -s --arg path "$2" "$SETTINGS_JQ"'one_object | (.. | strings) |= (split("{{path}}") | join($path))' "$1" 2>/dev/null
+}
+
+# sets ENTRY_STATE and CLASH
+settings_state() {
+  local rendered="$1" record="$2" settings="$3"
+  ENTRY_STATE="new"
+  CLASH=""
+  if [[ -e "$record" || -L "$record" ]] && marker_ours "$(sidecar_marker "$record")"; then
+    ENTRY_STATE="outdated"
+    jq -e --argjson new "$rendered" --slurpfile rec "$record" \
+      "$SETTINGS_JQ"'$rec == [$new] and holds($new)' <<<"$settings" >/dev/null 2>&1 \
+      && ENTRY_STATE="current"
+    return 0
+  fi
+  CLASH="$(jq -r --argjson new "$rendered" "$SETTINGS_JQ"'clashes($new) | join(", ")' <<<"$settings")"
+  if [[ -n "$CLASH" || -e "$record" || -L "$record" ]]; then ENTRY_STATE="foreign"; fi
+  return 0
+}
+
+writable() { [[ ! -e "$1" || -w "$1" ]]; }
+
+json_write() {
+  local file="$1" json="$2" target="$1"
+  if (( DRY_RUN )); then dry "write $file"; return 0; fi
+  if [[ -L "$file" ]]; then target="$(readlink -f -- "$file")" || target="$file"; fi
+  STAGED="$target.installing.$$"
+  if [[ -e "$target" ]]; then cp -- "$target" "$STAGED"; fi   # carries the mode over
+  printf '%s\n' "$json" >"$STAGED"
+  mv -f -- "$STAGED" "$target"
+  STAGED=""
+}
+
+fragment_state() {
+  local src="$1" path="$2" root="$3" rel="$4" rendered cur
+  ENTRY_STATE="new"
+  command -v jq >/dev/null || return 0
+  rendered="$(settings_render "$src" "$path")" || return 0
+  cur="$(settings_read "$root/settings.json")" || return 0
+  settings_state "$rendered" "$root/settings/$rel" "$cur"
+}
+
+fragment_install() {
+  local src="$1" path="$2" root="$3" rel="$4" label="$5"
+  local settings="$root/settings.json" record="$root/settings/$rel" rendered cur new old='{}' why status
+
+  command -v jq >/dev/null || { emit blocked "$label" "jq not found"; return 0; }
+  rendered="$(settings_render "$src" "$path")" || { emit blocked "$label" "invalid JSON"; return 0; }
+  cur="$(settings_read "$settings")" || { emit blocked "$label" "invalid settings.json"; return 0; }
+
+  settings_state "$rendered" "$record" "$cur"
+  case "$ENTRY_STATE" in
+    current)
+      emit current "$label" "up to date"
+      return 0 ;;
+    foreign)
+      why="$(tilde "$record") exists and was not installed by install"
+      [[ -z "$CLASH" ]] || why="$(tilde "$settings") already sets $CLASH"
+      may_take "$label" "$why" || return 0 ;;
+    outdated)
+      old="$(jq -s "$SETTINGS_JQ"'one_object' "$record" 2>/dev/null)" || old='{}' ;;
+  esac
+
+  new="$(jq --argjson old "$old" --argjson new "$rendered" "$SETTINGS_JQ"'apply($old; $new)' <<<"$cur")"
+  if [[ "$new" != "$cur" ]] && ! writable "$settings"; then
+    emit blocked "$label" "settings.json is read-only"
+    return 0
+  fi
+  [[ -d "${record%/*}" ]] || run mkdir -p -- "${record%/*}"
+  [[ "$new" == "$cur" ]] || json_write "$settings" "$new"
+  [[ ! -L "$record" ]] || run rm -f -- "$record"   # a record is a copy, never written through
+  json_write "$record" "$rendered"
+  (( DRY_RUN )) || write_marker "$record" "$src"
+
+  status="installed"
+  [[ "$ENTRY_STATE" == new ]] || status="updated"
+  emit "$status" "$label" "$(jq -r 'keys_unsorted | join(", ")' <<<"$rendered")"
+}
+
+type_state_settings()   { fragment_state "$1" "" "$(resolve_root)" "$2"; }
+type_install_settings() { fragment_install "$1" "" "$(resolve_root)" "$2" "$2"; }
+
+# sets BOUND
+bound_fragment() {
+  local src="$1" stem="${1##*/}"
+  [[ -d "$src" ]] || stem="${stem%.*}"
+  BOUND="${src%/*}/$stem.settings.json"
+  [[ -f "$BOUND" ]] || BOUND=""
+  return 0
+}
+
+# an entry whose bound settings need applying reads as outdated
+bound_state() {
+  local root="$1" type="$2" src="$3" dest="$4" name
+  declare -F "type_install_${type}" >/dev/null && return 0
+  command -v jq >/dev/null || return 0
+  bound_fragment "$src"
+  [[ -n "$BOUND" ]] || return 0
+  name="${BOUND##*/}"
+  fragment_state "$BOUND" "$dest" "$root" "$type/${name%.settings.json}.json"
+  [[ "$ENTRY_STATE" == current ]] || ENTRY_STATE="outdated"
+  return 0
+}
+
+bound_install() {
+  local root="$1" type="$2" src="$3" dest="$4" prev="$EMIT_TYPE" name
+  bound_fragment "$src"
+  [[ -n "$BOUND" ]] || return 0
+  name="${BOUND##*/}"
+  emit_as settings
+  fragment_install "$BOUND" "$dest" "$root" "$type/${name%.settings.json}.json" "$name"
+  EMIT_TYPE="$prev"
+}
+
+prunes() {
+  local f
+  (( ${#FILTERS[@]} == 0 )) && return 0
+  for f in "${FILTERS[@]}"; do [[ "$f" == "$1" ]] && return 0; done
+  return 1
+}
+
+stale_record() {
+  local record="$1" src="$2" label="$3"
+  [[ ! -e "$src" ]] && marker_ours "$(sidecar_marker "$record")" && printf '%s\t%s\n' "$label" "$record"
+  return 0
+}
+
+# prints label<TAB>record for each record of ours whose fragment left the repo
+stale_settings() {
+  local root="$1" spec name src_rel rest record file
+  [[ -d "$root/settings" ]] || return 0
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name src_rel rest <<<"$spec"
+    prunes "$name" || continue
+    if [[ "$name" == settings ]]; then
+      for record in "$root/settings"/*.json; do
+        [[ -e "$record" ]] || continue
+        stale_record "$record" "$REPO_ROOT/$src_rel/${record##*/}" "${record##*/}"
+      done
+    else
+      for record in "$root/settings/$name"/*.json; do
+        [[ -e "$record" ]] || continue
+        file="${record##*/}"
+        file="${file%.json}.settings.json"
+        stale_record "$record" "$REPO_ROOT/$src_rel/$file" "$name/$file"
+      done
+    fi
+  done
+}
+
+prune_settings() {
+  local root="$1" last="$2" settings="$1/settings.json" label record cur new
+  while IFS=$'\t' read -r label record; do
+    [[ "$last" == settings ]] || { type_heading settings; last=settings; }
+    if ! command -v jq >/dev/null; then
+      emit blocked "$label" "jq not found"
+    elif ! cur="$(settings_read "$settings")"; then
+      emit blocked "$label" "invalid settings.json"
+    elif ! new="$(jq --slurpfile rec "$record" "$SETTINGS_JQ"'apply($rec | one_object; {})' <<<"$cur" 2>/dev/null)"; then
+      emit blocked "$label" "invalid record"
+    elif [[ "$new" != "$cur" ]] && ! writable "$settings"; then
+      emit blocked "$label" "settings.json is read-only"
+    else
+      [[ "$new" == "$cur" ]] || json_write "$settings" "$new"
+      run rm -f -- "$record" "$(sidecar_marker "$record")"
+      emit removed "$label"
+    fi
+  done < <(stale_settings "$root")
+  return 0
 }
 
 hide_cursor() { CURSOR_HIDDEN=1; printf '\033[?25l' >&2; }
@@ -1022,6 +1244,7 @@ pick_entries() {
     fi
     desc="$(describe_entry "$(meta_path "$src" "$meta")")"
     entry_state "$src" "$root/$dest_rel/$entry" "$type"
+    [[ "$ENTRY_STATE" == current ]] && bound_state "$root" "$type" "$src" "$root/$dest_rel/$entry"
     [[ "$ENTRY_STATE" == current && -n "${PENDING[$type/$entry]+x}" ]] && ENTRY_STATE="${PENDING[$type/$entry]}"
     case "$ENTRY_STATE" in
       removed)  tag="removed upstream"; tagc="$C_RED" ;;
@@ -1105,7 +1328,7 @@ wizard() {
     choose "install scope" "scope_root_" "scope_help_" "$SCOPE" || cancelled
     SCOPE="$PICK"
   fi
-  if (( ${#FILTERS[@]} == 0 )); then
+  if (( ${#FILTERS[@]} == 0 && ${#ROWS[@]} )); then
     pick_entries "$(resolve_root)" || cancelled   # state needs mode and scope
   fi
   menu_clear "$LEAD"
@@ -1135,10 +1358,13 @@ walk_entries() {
 unpack_row() { IFS=$'\t' read -r type src dest_rel meta entry <<<"$1"; }
 
 compute_label_width() {
-  local row type src dest_rel meta entry width=0
-  for row in "${ROWS[@]}"; do
+  local row type src dest_rel meta entry width=0 name
+  for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
     (( ${#entry} > width )) && width=${#entry}
+    bound_fragment "$src"
+    name="${BOUND##*/}"
+    (( ${#name} > width )) && width=${#name}
   done
   printf '%s' "$(( width > 0 ? width : 12 ))"
 }
@@ -1147,26 +1373,24 @@ compute_label_width() {
 count_types() {
   local row type src dest_rel meta entry out="" t types=()
   local -A n=()
-  for row in "${ROWS[@]}"; do
+  for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
     [[ -z "${n[$type]+x}" ]] && types+=("$type")
     n[$type]=$(( ${n[$type]:-0} + 1 ))
   done
-  for t in "${types[@]}"; do out+="${out:+, }$(plural "${n[$t]}" "$t")"; done
-  printf '%s' "$out"
+  for t in ${types[@]+"${types[@]}"}; do out+="${out:+, }$(plural "${n[$t]}" "$t")"; done
+  printf '%s' "${out:-no entries}"
 }
 
 # one heading per asset type, so the run reads the way the picker looked
 install_entries() {
   local root="$1" row type src dest_rel meta entry dest_dir last=""
   local -A made=()
-  for row in "${ROWS[@]}"; do
+  for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
     if [[ "$type" != "$last" ]]; then
       last="$type"
-      EMIT_TYPE="$type"
-      EMIT_TYPES+=("$type")
-      printf '\n  %s%s%s%s\n' "$C_BOLD" "$C_BLUE" "$type" "$C_RESET"
+      type_heading "$type"
     fi
     if declare -F "type_install_${type}" >/dev/null; then
       "type_install_${type}" "$src" "$entry"
@@ -1178,7 +1402,9 @@ install_entries() {
       made[$dest_dir]=1
     fi
     "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$entry"
+    [[ "$LAST_STATUS" == blocked ]] || bound_install "$root" "$type" "$src" "$dest_dir/$entry"
   done
+  prune_settings "$root" "$last"
   printf '\n'
 }
 
@@ -1258,6 +1484,9 @@ EOF
   cat <<EOF
   Mods ignore mode: claude reads them in place, from the $MARKETPLACE
   marketplace this repo is added as.
+  Settings ignore mode: settings/<name>.json, and an entry's
+  <stem>.settings.json, are merged into the scope's settings.json with jq.
+  Delete the file and re-run, naming no entry, to strip it.
 
 ENVIRONMENT
   AGENT_SKILLS_REPO     Clone URL, overriding CLONE_URL in this script
@@ -1271,6 +1500,7 @@ EXAMPLES
   $ ./install skills/system-audit -y --scope global --mode link
   $ ./install skills -y --dry-run
   $ ./install mods -y --scope global
+  $ ./install settings -y --scope global
 EOF
 }
 
@@ -1371,7 +1601,9 @@ main() {
   local row
   ROWS=()
   while IFS= read -r row; do ROWS+=("$row"); done < <(walk_entries)
-  (( ${#ROWS[@]} == 0 )) && die "no matching entries"
+  if (( ${#ROWS[@]} == 0 )) && { (( DO_LIST )) || [[ -z "$(stale_settings "$(resolve_root)")" ]]; }; then
+    die "no matching entries"
+  fi
 
   (( DO_LIST )) && { list_assets; return 0; }
 

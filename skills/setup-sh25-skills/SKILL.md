@@ -5,7 +5,7 @@ argument-hint: "(optional) status | install | remove | setup [entry]"
 disable-model-invocation: true
 ---
 
-`install` puts assets on disk. This skill covers the rest: reporting what landed where, removing it, and the configuration `install` does not do: pointing Claude Code at an installed script, and whatever wiring later assets need.
+`install` puts assets on disk and applies their settings. This skill covers the rest: reporting what landed where, removing it, and whatever wiring `install` does not do.
 
 Bare invocation runs `status` and changes nothing. Every write is confirmed with the user first.
 
@@ -69,7 +69,13 @@ One row per asset that needs configuration beyond being on disk. Assets not list
 
 | entry | wiring |
 | --- | --- |
-| `scripts/statusline.sh` | Point `statusLine` in the scope's `settings.json` at the installed script: `{"type": "command", "command": "bash \"<installed path>\""}`. Wired when that command already names the installed path. Needs `jq` on `PATH`, which the script itself requires anyway. |
+
+## Settings fragments
+
+`install` merges `settings/<name>.json`, and the `<stem>.settings.json` beside an entry, into the scope's `settings.json`. It records each under `<root>/settings/`, as `<name>.json`, or `<type>/<stem>.json` for one bound to an entry, with a sidecar marker.
+
+- `status`: an entry with a bound fragment is `wired` when its record exists and its marker is ours.
+- `remove`: after deleting the entry, unapply its bound record. For each top-level key in the record, when every value under it still matches `settings.json`, delete those values and any object left empty; a key with any value changed by hand stays whole. Then delete the record and its marker.
 
 ## Marker files
 
