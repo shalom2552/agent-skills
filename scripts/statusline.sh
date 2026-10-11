@@ -4,14 +4,12 @@
 # (dir/time intentionally omitted — already in tmux bar and zsh prompt)
 #
 # Progressive disclosure: segments that carry no signal stay hidden.
-#   - rate limits appear only once either window crosses LIMIT_FLOOR
 #   - a limit at/over HOT adds its reset countdown
 #   - the diff appears only once lines have actually changed
 #
 # NOTE: percentages arrive as floats (e.g. 14.000000000000002) — always `round` in jq,
 # never regex-match the raw value or the segment silently disappears.
 
-LIMIT_FLOOR=30   # below this, rate limits are noise
 HOT=85           # at/above this, show when the window resets
 BAR_CAP=300000   # context bar full at this many tokens
 CTX_WARN=100000  # context yellow from here
@@ -134,8 +132,8 @@ fi
 
 segments+=( "$(git_seg "$cwd")" )
 
-# rate limits: hidden while both windows are comfortably low
-if [[ -n "$lim5" && -n "$lim7" ]] && (( lim5 >= LIMIT_FLOOR || lim7 >= LIMIT_FLOOR )); then
+# rate limits: always, once both windows are reported
+if [[ -n "$lim5" && -n "$lim7" ]]; then
     segments+=( "$(printf '%s \033[2m·\033[0m %s' \
         "$(limit 5h "$lim5" "$reset5")" "$(limit 7d "$lim7" "$reset7")")" )
 fi
