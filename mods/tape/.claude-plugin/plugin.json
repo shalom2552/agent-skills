@@ -1,0 +1,9 @@
+{
+  "name": "tape",
+  "version": "0.1.0",
+  "description": "/tape: a live pane of every tool call, grouped by turn, with status, target and duration.",
+  "author": {
+    "name": "shalom2552"
+  },
+  "types": "./types/index.d.ts"
+}

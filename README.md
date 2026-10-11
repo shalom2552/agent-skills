@@ -40,3 +40,4 @@ Claude Code plugins in `mods/`. `./install mods` adds this repo as the `shalom25
 | Mod | Description |
 | --- | --- |
 | `spinner-words` | Swap the spinner verbs for dev ones. |
+| `tape` | `/tape` pane of tool calls per turn. |
