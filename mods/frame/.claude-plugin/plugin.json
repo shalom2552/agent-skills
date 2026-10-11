@@ -1,0 +1,9 @@
+{
+  "name": "frame",
+  "version": "0.1.0",
+  "description": "Rounded frame around your prompts.",
+  "author": {
+    "name": "shalom2552"
+  },
+  "types": "./types/index.d.ts"
+}

@@ -41,3 +41,4 @@ Claude Code plugins in `mods/`. `./install mods` adds this repo as the `shalom25
 | --- | --- |
 | `spinner-words` | Swap the spinner verbs for dev ones. |
 | `tape` | `/tape` pane of tool calls per turn. |
+| `frame` | Rounded frame around your prompts. |
