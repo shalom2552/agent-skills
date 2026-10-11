@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { WORDS } from './register'
+import { WORDS } from '../hooks/register'
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`spinner word comes from the list on ${surface}`, async ($, on) => {
