@@ -17,6 +17,9 @@ const LONG = 10_000
 const HEAD = 2_500
 const TAIL = 2_500
 const PASTE = /\n{0,2}<pasted_content id="([0-9a-f]{4})">\n([\s\S]*?)\n<\/pasted_content id="\1">\n{0,2}/g
+const COMMAND_TAGS = /<command-(name|message|args)>[\s\S]*?<\/command-\1>/g
+const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
 const COUNT_ICON = ''
 const CLOCK_ICON = '\u{f0150}'
 
@@ -57,8 +60,20 @@ export const unwrapPastes = (text: string) => {
   return out
 }
 
+// Undocumented (CC 2.1.296): a slash command's echo row (session.append door 'command') whose text starts
+// with <command-...> tags is drawn by the engine, no UserMessage render. Prefixing "/name args" makes it
+// a UserMessage row; the tags stay for the model. If commands lose the frame, re-probe those two events.
+export const echoOf = (text: string) => {
+  const name = COMMAND_NAME.exec(text)?.[1]
+  if (name === undefined || !text.trimStart().startsWith('<command-')) return undefined
+  const args = COMMAND_ARGS.exec(text)?.[1]?.trim() ?? ''
+  return `${args === '' ? name : `${name} ${args}`}\n${text}`
+}
+
+export const unwrapCommand = (text: string) => (COMMAND_NAME.test(text) ? text.replace(COMMAND_TAGS, '').trim() : text)
+
 export const displayOf = (text: string) => {
-  const shown = unwrapPastes(text)
+  const shown = unwrapPastes(unwrapCommand(text))
   if (shown.length <= LONG) return { head: shown, hiddenLines: 0, tail: '' }
   const head = shown.slice(0, HEAD)
   const tail = shown.slice(-TAIL)
@@ -79,10 +94,13 @@ export const storedStampsOf = (raw: unknown): Stamps => {
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
 
-const lastOf = (all: Stamps) => Object.values(all).reduce((a, s) => Math.max(a, s.n), 0)
+const textsOf = (content: readonly { type: string; text?: string }[]) =>
+  content.flatMap(b => (b.type === 'text' && b.text !== undefined ? [b.text.trim()] : []))
+
+const lastOf =(all: Stamps) => Object.values(all).reduce((a, s) => Math.max(a, s.n ?? 0), 0)
 
 const newest = (entries: [string, FrameStamp][]) =>
-  Object.fromEntries(entries.sort(([, a], [, b]) => a.n - b.n).slice(-MAX_STAMPS))
+  Object.fromEntries(entries.sort(([, a], [, b]) => a.at - b.at).slice(-MAX_STAMPS))
 
 const load = async ($: EngineInterface, cache: Map<string, Stamps>, id: string) => {
   const cached = cache.get(id)
@@ -98,6 +116,19 @@ const persist = async ($: EngineInterface, id: string, all: Stamps) => {
   await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
     if (key.startsWith(STAMPS_PREFIX) && !kept.includes(key.slice(STAMPS_PREFIX.length))) await $.store.delete(key)
+  }
+}
+
+const stampRow = async ($: EngineInterface, cache: Map<string, Stamps>, uuid: string, texts: string[], isCounted: boolean) => {
+  const at = await $.clock.now()
+  const id = await settled($.session.id())
+  const prior = id === undefined ? {} : await load($, cache, id)
+  const stamp: FrameStamp = isCounted ? { n: await update($, count, c => Math.max(c, lastOf(prior)) + 1), at, texts } : { at, texts }
+  await update($, stamps, all => newest([...Object.entries(all), [uuid, stamp]]))
+  if (id !== undefined) {
+    const all = newest([...Object.entries(prior), [uuid, stamp]])
+    cache.set(id, all)
+    await settled(persist($, id, all))
   }
 }
 
@@ -123,24 +154,28 @@ export const register: Register = on => {
   on('session.append', { door: 'prompt' }, async ($, e, next) => {
     const kept = await next(e)
     if (kept.deny === undefined && e.agentId === undefined && e.origin.kind === 'composer') {
-      const at = await $.clock.now()
-      const texts = kept.message.content.flatMap(b => (b.type === 'text' ? [b.text.trim()] : []))
-      const id = await settled($.session.id())
-      const prior = id === undefined ? {} : await load($, stored, id)
-      const n = await update($, count, c => Math.max(c, lastOf(prior)) + 1)
-      const stamp = { n, at, texts }
-      await update($, stamps, all => newest([...Object.entries(all), [kept.uuid, stamp]]))
-      if (id !== undefined) {
-        const all = newest([...Object.entries(prior), [kept.uuid, stamp]])
-        stored.set(id, all)
-        await settled(persist($, id, all))
-      }
+      await stampRow($, stored, kept.uuid, textsOf(kept.message.content), true)
     }
     return kept
   })
 
+  on('session.append', { door: 'command' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const content = e.message.content.map(b => {
+      if (b.type !== 'text') return b
+      const echo = echoOf(b.text)
+      return echo === undefined ? b : { ...b, text: echo }
+    })
+    if (content.every((b, i) => b === e.message.content[i])) return next(e)
+    const kept = await next({ ...e, message: { ...e.message, content } })
+    if (kept.deny === undefined) await stampRow($, stored, kept.uuid, textsOf(kept.message.content), false)
+    return kept
+  })
+
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    if (e.props.isExpanded || e.props.origin.kind !== 'composer') return next(e)
+    const isEcho = COMMAND_NAME.test(e.props.text)
+    if (e.props.isExpanded) return isEcho ? next({ ...e, props: { ...e.props, text: unwrapCommand(e.props.text) } }) : next(e)
+    if (e.props.origin.kind !== 'composer' && !isEcho) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
     const text = e.props.text.trim()
@@ -148,7 +183,7 @@ export const register: Register = on => {
       all[e.requestId] ??
       Object.values(all)
         .filter(s => s.texts.includes(text))
-        .sort((a, b) => b.n - a.n)[0]
+        .sort((a, b) => b.at - a.at)[0]
     let stamp = match(await read($, stamps))
     if (stamp === undefined) {
       const id = await settled($.session.id())
@@ -156,12 +191,14 @@ export const register: Register = on => {
     }
     const offset = await read($, offsetMs)
     const shown = displayOf(e.props.text)
-    const title =
+    const parts =
       stamp === undefined
-        ? undefined
-        : offset === null
-          ? `${COUNT_ICON} ${stamp.n}`
-          : `${COUNT_ICON} ${stamp.n} · ${CLOCK_ICON} ${clockOf(stamp.at, offset)}`
+        ? []
+        : [
+            ...(stamp.n === undefined ? [] : [`${COUNT_ICON} ${stamp.n}`]),
+            ...(offset === null ? [] : [`${CLOCK_ICON} ${clockOf(stamp.at, offset)}`]),
+          ]
+    const title = parts.length === 0 ? undefined : parts.join(' · ')
 
     return (
       <Box flexDirection="column" marginTop={1}>
