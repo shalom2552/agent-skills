@@ -1,5 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { FrameStamp } from '../types'
 
 const stamps = atom({ plugin: 'frame', key: 'stamps' } as const, {})
 const count = atom({ plugin: 'frame', key: 'count' } as const, 0)
@@ -7,6 +9,10 @@ const offsetMs = atom({ plugin: 'frame', key: 'offsetMs' } as const, null)
 
 const BORDER = '#89b4fa'
 const MAX_STAMPS = 500
+const MAX_SESSIONS = 50
+const STORE_VERSION = 1
+const SESSIONS_KEY = 'sessions'
+const STAMPS_PREFIX = 'stamps:'
 const LONG = 10_000
 const HEAD = 2_500
 const TAIL = 2_500
@@ -60,7 +66,44 @@ export const displayOf = (text: string) => {
   return { head, hiddenLines, tail }
 }
 
+type Stamps = Record<string, FrameStamp>
+
+const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+
+export const storedStampsOf = (raw: unknown): Stamps => {
+  if (typeof raw !== 'object' || raw === null || Reflect.get(raw, 'version') !== STORE_VERSION) return {}
+  const all = Reflect.get(raw, 'stamps')
+  return typeof all === 'object' && all !== null ? all : {}
+}
+
+export const keptSessionsOf = (raw: unknown, id: string) =>
+  [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
+
+const lastOf = (all: Stamps) => Object.values(all).reduce((a, s) => Math.max(a, s.n), 0)
+
+const newest = (entries: [string, FrameStamp][]) =>
+  Object.fromEntries(entries.sort(([, a], [, b]) => a.n - b.n).slice(-MAX_STAMPS))
+
+const load = async ($: EngineInterface, cache: Map<string, Stamps>, id: string) => {
+  const cached = cache.get(id)
+  if (cached !== undefined) return cached
+  const all = storedStampsOf(await settled($.store.get(STAMPS_PREFIX + id)))
+  cache.set(id, all)
+  return all
+}
+
+const persist = async ($: EngineInterface, id: string, all: Stamps) => {
+  await $.store.set(STAMPS_PREFIX + id, { version: STORE_VERSION, stamps: all })
+  const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
+  await $.store.set(SESSIONS_KEY, kept)
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(STAMPS_PREFIX) && !kept.includes(key.slice(STAMPS_PREFIX.length))) await $.store.delete(key)
+  }
+}
+
 export const register: Register = on => {
+  const stored = new Map<string, Stamps>()
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const ran = await $.process.run(['date', '+%z']).catch(() => undefined)
@@ -70,7 +113,7 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
+    if (e.reason === 'clear' || e.reason === 'resume') {
       await update($, stamps, () => ({}))
       await update($, count, () => 0)
     }
@@ -82,14 +125,16 @@ export const register: Register = on => {
     if (kept.deny === undefined && e.agentId === undefined && e.origin.kind === 'composer') {
       const at = await $.clock.now()
       const texts = kept.message.content.flatMap(b => (b.type === 'text' ? [b.text.trim()] : []))
-      const n = await update($, count, c => c + 1)
-      await update($, stamps, all =>
-        Object.fromEntries(
-          [...Object.entries(all), [kept.uuid, { n, at, texts }] as const]
-            .sort(([, a], [, b]) => a.n - b.n)
-            .slice(-MAX_STAMPS),
-        ),
-      )
+      const id = await settled($.session.id())
+      const prior = id === undefined ? {} : await load($, stored, id)
+      const n = await update($, count, c => Math.max(c, lastOf(prior)) + 1)
+      const stamp = { n, at, texts }
+      await update($, stamps, all => newest([...Object.entries(all), [kept.uuid, stamp]]))
+      if (id !== undefined) {
+        const all = newest([...Object.entries(prior), [kept.uuid, stamp]])
+        stored.set(id, all)
+        await settled(persist($, id, all))
+      }
     }
     return kept
   })
@@ -98,13 +143,17 @@ export const register: Register = on => {
     if (e.props.isExpanded || e.props.origin.kind !== 'composer') return next(e)
 
     const { Box, Text } = $.ui.resolve(e)
-    const all = await read($, stamps)
     const text = e.props.text.trim()
-    const stamp =
+    const match = (all: Stamps) =>
       all[e.requestId] ??
       Object.values(all)
         .filter(s => s.texts.includes(text))
         .sort((a, b) => b.n - a.n)[0]
+    let stamp = match(await read($, stamps))
+    if (stamp === undefined) {
+      const id = await settled($.session.id())
+      if (id !== undefined) stamp = match(await load($, stored, id))
+    }
     const offset = await read($, offsetMs)
     const shown = displayOf(e.props.text)
     const title =
