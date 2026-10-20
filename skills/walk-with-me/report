@@ -11,9 +11,11 @@ function rows(lab, lc, vc, a, c,   i, sp) {
 function flush() {
   if (st == "pass") { f = g; printf "%s╭─%s %s PASS %s  case %s\n", f, n, pb, n, num }
   else if (st == "fail") { f = R; printf "%s╭─%s %s FAIL %s  case %s\n%s│%s\n", f, n, fb, n, num, f, n }
-  else if (st == "output") { f = d; printf "%s╭─ output%s\n", f, n; rows("", "", "", out, no) }
+  else if (st == "output") { f = d; printf "%s╭─ run%s\n", f, n }
   if (st == "pass" || st == "fail" || st == "output") {
     rows("input  ", d, "", inp, ni)
+    if (st == "pass") rows("result ", d, g, go, ng)
+    if (st == "output") rows("output ", d, "", out, no)
     if (st == "fail") { printf "%s│%s\n", f, n; rows("- expected  ", G, G, ex, ne); rows("+ got       ", R, R, go, ng); printf "%s│%s\n", f, n }
     if (ns) { printf "%s├─%s %sstdout%s\n", f, n, d, n; rows("", "", "", so, ns) }
     printf "%s╰─%s\n\n", f, n

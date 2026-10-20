@@ -77,6 +77,7 @@ Both print plain lines, one field each, and [`report`](report), in this skill's 
 ```
 case 1 pass
 input [[1,4],[2,3]]
+got [[1,4]]
 case 2 fail
 input [[1,10],[2,3]]
 expected [[1,10]]
@@ -86,7 +87,7 @@ case 3 hidden
 total 12
 ```
 
-A case starts with `case <n> pass|fail|hidden`, then its fields, each repeated one line at a time for multi-line values. `hidden` is a passing hidden case: counted, not shown, so its input stays hidden; a failing hidden case prints like any other. A crash fails the case, with the error as `got`. Each case runs under a time limit, generous for the best known approach but tight enough that a slower complexity class fails at the size limit; a case over it fails with `got timeout`. `stdout` holds whatever the user's code printed during the case, stdout and stderr, so debug prints work; when the task is judged on stdout, it holds stderr only. `total` is the number of cases in the suites run. `run <input>` prints `output` lines and `stdout` lines instead of cases.
+A case starts with `case <n> pass|fail|hidden`, then its fields, each repeated one line at a time for multi-line values. A passing case carries `got`, a failing one `expected` and `got`. `hidden` is a passing hidden case: counted, not shown, so its input stays hidden; a failing hidden case prints like any other. A crash fails the case, with the error as `got`. Each case runs under a time limit, generous for the best known approach but tight enough that a slower complexity class fails at the size limit; a case over it fails with `got timeout`. `stdout` holds whatever the user's code printed during the case, stdout and stderr, so debug prints work; when the task is judged on stdout, it holds stderr only. `total` is the number of cases in the suites run. `run <input>` prints `output` lines and `stdout` lines instead of cases.
 
 The task folder's `run` and `submit` both hold this wrapper, which calls the `tests/` script of the same name and pipes it to `report`. `<skill-dir>` is this skill's folder, as an absolute path. They work from any folder: the user runs `./run` in the task folder, the agent `./<task>/run` from the project directory.
 
