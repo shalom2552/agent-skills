@@ -1,10 +1,11 @@
 {
-  "name": "shalom2552",
-  "owner": { "name": "shalom2552" },
-  "plugins": [
-    { "name": "spinner-words", "source": "./mods/spinner-words" },
-    { "name": "tape", "source": "./mods/tape" },
-    { "name": "frame", "source": "./mods/frame" },
-    { "name": "beat", "source": "./mods/beat" }
-  ]
+    "name": "shalom2552",
+    "owner": { "name": "shalom2552" },
+    "plugins": [
+        { "name": "spinner-words", "source": "./mods/spinner-words" },
+        { "name": "tape", "source": "./mods/tape" },
+        { "name": "frame", "source": "./mods/frame" },
+        { "name": "beat", "source": "./mods/beat" },
+        { "name": "statusline", "source": "./mods/statusline" }
+    ]
 }

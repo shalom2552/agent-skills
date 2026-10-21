@@ -1,0 +1,9 @@
+{
+  "name": "statusline",
+  "version": "0.1.0",
+  "description": "Status line as live pills under the prompt.",
+  "author": {
+    "name": "shalom2552"
+  },
+  "types": "./types/index.d.ts"
+}
