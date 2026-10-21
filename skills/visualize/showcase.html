@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Visualize kit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap">
+<link rel="stylesheet" href="kit.css">
+<style>
+.demo { border-top: 1px solid var(--line); padding-top: 1.25rem; margin-top: 2.25rem; }
+.demo > h3 { margin: 0 0 0.25rem; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.demo-use { color: var(--muted); font-size: 0.9375rem; }
+.demo-use code { font-size: 0.8125rem; }
+.demo-live > * + * { margin-top: 1rem; }
+.demo-copy { font: 600 0.75rem/1 var(--font); color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 0.4rem 0.6rem; cursor: pointer; white-space: nowrap; }
+.demo-copy:hover { color: var(--text); border-color: var(--line-strong); }
+.index { columns: 12rem; column-gap: 1.5rem; font-size: 0.9375rem; padding: 0; list-style: none; }
+.index li { break-inside: avoid; margin: 0 0 0.25rem; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.5rem; }
+.swatches > div { display: flex; align-items: center; gap: 0.5rem; font: 0.8125rem/1.3 var(--mono); }
+.swatches i { flex: none; width: 1.75rem; height: 1.75rem; border-radius: var(--radius-sm); background: var(--s); border: 1px solid var(--line); }
+.swatches i.see { background: linear-gradient(var(--s), var(--s)), linear-gradient(to right, var(--bg) 50%, var(--text) 50%); }
+.demo-live > .swatches + .swatches { margin-top: 0.5rem; }
+.venn svg { display: block; width: 100%; max-width: 26rem; margin-inline: auto; }
+.venn circle { stroke-width: 2; }
+</style>
+</head>
+<body>
+<header class="page-head">
+  <h1>Visualize kit</h1>
+  <p class="brief">Every block a page can start from, live, with its markup one click away. Blocks are defaults, not rules: change them, combine them, or build a new one from the same tokens.</p>
+</header>
+<main>
+<p>A page links nothing local: <code>inline</code> pastes <code>kit.css</code> and <code>kit.js</code> into it. Libraries load from a CDN only on pages that use them, and each block that needs one keeps its content as text first, so the page still reads offline. The demos below use small, unrelated subjects on purpose: a block fits a shape of content, not a topic.</p>
+<ul class="index">
+  <li><a href="#callout">Callout</a></li><li><a href="#stats">Stat tiles</a></li><li><a href="#glossary">Glossary</a></li><li><a href="#term">Term tooltip</a></li>
+  <li><a href="#table">Table</a></li><li><a href="#compare">Comparison</a></li><li><a href="#parts">Proportion bar</a></li><li><a href="#chart">Chart</a></li><li><a href="#matrix">2x2 matrix</a></li>
+  <li><a href="#flow">Flow</a></li><li><a href="#layers">Layer stack</a></li><li><a href="#timeline">Timeline</a></li><li><a href="#tree">Tree</a></li><li><a href="#paths">Branches</a></li><li><a href="#cycle">Cycle</a></li><li><a href="#cells">Cells and fields</a></li><li><a href="#annotated">Annotated figure</a></li><li><a href="#mock">UI mock</a></li><li><a href="#mermaid">Mermaid</a></li>
+  <li><a href="#code">Code</a></li><li><a href="#code-notes">Annotated code</a></li><li><a href="#math">Formula</a></li><li><a href="#terminal">Terminal</a></li>
+  <li><a href="#tabs">Tabs</a></li><li><a href="#more">Collapsible</a></li><li><a href="#stepper">Step-through</a></li><li><a href="#playground">Playground</a></li><li><a href="#check">Self-check</a></li>
+  <li><a href="#custom">Custom block</a></li><li><a href="#tokens">Tokens</a></li><li><a href="#helpers">Helpers</a></li><li><a href="#api">Page scripts</a></li>
+</ul>
+
+<h2>Text</h2>
+
+<section class="demo" id="callout">
+  <h3>Callout</h3>
+  <p class="demo-use">A point the reader must not miss: a caveat, a rule, a result. <code>data-tone</code>: info (default), ok, warn, bad, tip. A bold lead-in takes the tone color.</p>
+  <div class="demo-live">
+    <aside class="callout"><p><b>Note.</b> Sunlight takes about 8 minutes 20 seconds to reach Earth, so the Sun you see is the Sun of 8 minutes ago.</p></aside>
+    <aside class="callout" data-tone="ok"><p><b>Holds.</b> Each git commit's hash covers its parent's hash, so rewriting an old commit changes every hash after it.</p></aside>
+    <aside class="callout" data-tone="warn"><p><b>Careful.</b> In floating point, 0.1 + 0.2 is 0.30000000000000004. Keep money in whole cents.</p></aside>
+    <aside class="callout" data-tone="bad"><p><b>Breaks.</b> A regex with nested quantifiers, like <code>(a+)+$</code>, can take exponential time on a long input that does not match.</p></aside>
+    <aside class="callout" data-tone="tip"><p><b>Tip.</b> Dough has proofed enough when a floured fingertip dent springs back slowly.</p></aside>
+  </div>
+</section>
+
+<section class="demo" id="stats">
+  <h3>Stat tiles</h3>
+  <p class="demo-use">Key quantities a reader should remember. The number leads, the label says what it counts. <code>key</code> marks the one that matters most.</p>
+  <div class="demo-live">
+    <div class="stats">
+      <div class="stat"><b>384,400&nbsp;km</b><span>average distance from Earth to the Moon</span></div>
+      <div class="stat"><b>27.3&nbsp;days</b><span>for one orbit around Earth</span></div>
+      <div class="stat"><b>1.62&nbsp;m/s&sup2;</b><span>surface gravity, a sixth of Earth's</span></div>
+      <div class="stat key"><b>1.3&nbsp;s</b><span>for light to cross the gap</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="glossary">
+  <h3>Glossary</h3>
+  <p class="demo-use">Terms the page relies on, defined once. Stacks on narrow screens.</p>
+  <div class="demo-live">
+    <dl class="glossary">
+      <div><dt>Cache hit</dt><dd>The response comes from a stored copy, with no trip to the server.</dd></div>
+      <div><dt>ETag</dt><dd>A tag for one version of a resource, so a client can ask "has this changed?"</dd></div>
+      <div><dt>max-age</dt><dd>How many seconds a stored response stays fresh.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="demo" id="term">
+  <h3>Term tooltip</h3>
+  <p class="demo-use">Jargon defined in place. Shows on hover, focus or tap; Escape hides it. Without scripts the definition prints in brackets.</p>
+  <div class="demo-live">
+    <p>Sourdough rises because of its starter: wild yeast living alongside <span class="term" data-tip="Bacteria that turn sugars into lactic acid, which gives sourdough its sour taste.">lactobacilli</span>.</p>
+  </div>
+</section>
+
+<h2>Data</h2>
+
+<section class="demo" id="table">
+  <h3>Table</h3>
+  <p class="demo-use">Rows of facts with the same fields. Wrap it in <code>.scroll</code> so a wide table scrolls in its own box (kit.js adds the wrapper if it is missing). <code>.num</code> right-aligns a numeric column; <code>data-tone</code> or <code>data-c</code> on a cell tints it.</p>
+  <div class="demo-live">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Class</th><th class="num">Codes</th><th>Means</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td>1xx</td><td class="num">100&ndash;199</td><td>Informational</td><td>101 Switching Protocols</td></tr>
+          <tr><td>2xx</td><td class="num">200&ndash;299</td><td data-tone="ok">Success</td><td>200 OK</td></tr>
+          <tr><td>3xx</td><td class="num">300&ndash;399</td><td>Redirection</td><td>304 Not Modified</td></tr>
+          <tr><td>4xx</td><td class="num">400&ndash;499</td><td data-tone="warn">Client error</td><td>404 Not Found</td></tr>
+          <tr><td>5xx</td><td class="num">500&ndash;599</td><td data-tone="bad">Server error</td><td>503 Service Unavailable</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="compare">
+  <h3>Comparison</h3>
+  <p class="demo-use">A trade-off or a before and after. Two to four columns that stack on narrow screens. <code>data-tone</code> on a column colors its border and heading, for when one side is the better one; <code>data-c</code> colors the border only.</p>
+  <div class="demo-live">
+    <div class="compare">
+      <section>
+        <h4>Array</h4>
+        <ul><li>Reads item <i>i</i> in one step</li><li>Inserting in the middle shifts every later item</li><li>Items sit side by side, so the CPU cache helps</li></ul>
+      </section>
+      <section data-c="2">
+        <h4>Linked list</h4>
+        <ul><li>Reaching item <i>i</i> walks <i>i</i> links</li><li>Inserts in one step once you hold the node</li><li>Every node carries a pointer, so more memory</li></ul>
+      </section>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="parts">
+  <h3>Proportion bar</h3>
+  <p class="demo-use">Shares of a whole. Each item's number goes in <code>&lt;b&gt;</code>; kit.js draws the bar and adds percentages unless the numbers already are. Colors follow the series order, or set <code>data-c</code> (1 to 8) or <code>data-tone</code>.</p>
+  <div class="demo-live">
+    <figure class="parts">
+      <ol>
+        <li>Nitrogen <b>78.08%</b></li>
+        <li>Oxygen <b>20.95%</b></li>
+        <li>Argon <b>0.93%</b></li>
+        <li>Everything else <b>0.04%</b></li>
+      </ol>
+      <figcaption>Dry air by volume. Water vapor varies, so it is left out.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="chart">
+  <h3>Chart</h3>
+  <p class="demo-use">Numbers whose shape matters: a trend, a comparison, a spread. The table is the data and the fallback; Chart.js draws from it and the table moves under a Data toggle. First column: labels (x values for scatter). Other numeric columns: one series each; a text column is not a series, and the first one names each point in tooltips. A line chart whose labels are all plain numbers (years, sizes; no units) gets a true-to-scale x axis. Color a series with <code>data-c</code> or <code>data-tone</code> on its <code>th</code>; otherwise colors follow column order. All-integer data gets whole-number ticks. <code>data-type</code>: bar (default), line, pie, doughnut, scatter. Also <code>data-x</code> and <code>data-y</code> (axis titles: label axis, value axis), <code>data-log</code> (<code>"y"</code>, <code>"x"</code> or <code>"x y"</code>), <code>data-stacked</code>, <code>data-horizontal</code>. Anything else: <code>kit.chart()</code> under Page scripts. It only draws: put its canvas in <code>&lt;div class="chart-box"&gt;</code> for the kit's height, and keep the numbers as text beside it (a table in <code>.scroll</code>, or the caption) for readers without the library.</p>
+  <div class="demo-live">
+    <figure class="chart" data-type="line" data-log="x y" data-x="Items to sort, log scale" data-y="Comparisons, log scale">
+      <table>
+        <thead><tr><th>n</th><th>n log&#8322; n (merge sort)</th><th data-tone="bad">n&sup2; (bubble sort)</th></tr></thead>
+        <tbody>
+          <tr><td>10</td><td>33</td><td>100</td></tr>
+          <tr><td>100</td><td>664</td><td>10,000</td></tr>
+          <tr><td>1,000</td><td>9,966</td><td>1,000,000</td></tr>
+          <tr><td>10,000</td><td>132,877</td><td>100,000,000</td></tr>
+          <tr><td>100,000</td><td>1,660,964</td><td>10,000,000,000</td></tr>
+        </tbody>
+      </table>
+      <figcaption>At 100,000 items, a quadratic sort does about 6,000 times the work.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="matrix">
+  <h3>2x2 matrix</h3>
+  <p class="demo-use">Items placed on two axes. Children in order: top left, top right, bottom left, bottom right. Axes grow up and to the right; name them with <code>data-y</code> and <code>data-x</code>.</p>
+  <div class="demo-live">
+    <div class="matrix" data-x="Urgency" data-y="Importance">
+      <section class="key"><h4>Schedule</h4><ul><li>Exercise</li><li>Learning a skill</li></ul></section>
+      <section><h4>Do now</h4><ul><li>A deadline today</li><li>A site outage</li></ul></section>
+      <section><h4>Drop</h4><ul><li>Endless feeds</li></ul></section>
+      <section><h4>Delegate</h4><ul><li>Most interruptions</li></ul></section>
+    </div>
+  </div>
+</section>
+
+<h2>Diagrams</h2>
+
+<section class="demo" id="flow">
+  <h3>Flow</h3>
+  <p class="demo-use">A sequence or pipeline. Up to four stages run across a wide column; more, or a narrow column, stack downward. Each stage: optional <code>&lt;small&gt;</code> label, <code>&lt;b&gt;</code> name, <code>&lt;span&gt;</code> detail. <code>data-c</code> or <code>data-tone</code> on a stage colors its edge. Keep names to a word or two: four stages across get narrow cards.</p>
+  <div class="demo-live">
+    <ol class="flow">
+      <li><small>Look up</small><b>DNS</b><span>turns the name into an IP address</span></li>
+      <li data-tone="warn"><small>Connect</small><b>TCP and TLS</b><span>two round trips before any data</span></li>
+      <li><small>Request</small><b>HTTP GET</b><span>the server answers with HTML</span></li>
+      <li><small>Render</small><b>Browser</b><span>parses, fetches assets, paints</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="layers">
+  <h3>Layer stack</h3>
+  <p class="demo-use">Parts of a system, top to bottom. Each layer: a label, then a list of cells. <code>li.link</code> between layers names what connects them. Tags mark kinds or owners.</p>
+  <div class="demo-live">
+    <ol class="layers">
+      <li><b>Application</b><ul><li>HTTP</li><li>DNS</li><li>SSH</li></ul></li>
+      <li class="link">sockets</li>
+      <li><b>Transport</b><ul><li>TCP <span class="tag" data-c="1">reliable</span></li><li>UDP <span class="tag" data-c="2">fast</span></li></ul></li>
+      <li><b>Internet</b><ul><li class="key">IP</li><li>ICMP</li></ul></li>
+      <li><b>Link</b><ul><li>Ethernet</li><li>Wi-Fi</li></ul></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="timeline">
+  <h3>Timeline</h3>
+  <p class="demo-use">Events in time order. <code>&lt;time&gt;</code>, then a title and a line of detail. <code>data-c</code> (1 to 8) or <code>data-tone</code> colors a dot, for a side or a kind; <code>key</code> rings it.</p>
+  <div class="demo-live">
+    <ol class="timeline">
+      <li><time>Jul 16, 1969</time><b>Launch</b><p>Apollo 11 lifts off from Kennedy Space Center.</p></li>
+      <li><time>Jul 19</time><b>Lunar orbit</b><p>Columbia and Eagle enter orbit around the Moon.</p></li>
+      <li class="key"><time>Jul 20</time><b>Landing</b><p>Eagle touches down in the Sea of Tranquility.</p></li>
+      <li data-tone="ok"><time>Jul 24</time><b>Splashdown</b><p>The crew lands safely in the Pacific.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="tree">
+  <h3>Tree</h3>
+  <p class="demo-use">A hierarchy: folders, an org, a taxonomy. Nested lists; a <code>&lt;span&gt;</code> after a name adds a note. Deep trees scroll sideways in their box.</p>
+  <div class="demo-live">
+    <div class="tree">
+      <ul>
+        <li><b>my-site/</b>
+          <ul>
+            <li><b>src/</b><span>source code</span>
+              <ul><li class="key">components/<span>reusable pieces</span></li><li>pages/<span>one file per route</span></li></ul>
+            </li>
+            <li><b>public/</b><span>served as is</span></li>
+            <li>package.json<span>dependencies and scripts</span></li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="paths">
+  <h3>Branches</h3>
+  <p class="demo-use">A decision that splits into paths. Optional start <code>&lt;p&gt;</code>, one <code>&lt;section&gt;</code> per path, optional end <code>&lt;p&gt;</code> where they meet. Paths sit side by side, or stack with "or" between them. <code>data-tone</code> on a path colors its border and heading; <code>data-c</code> colors the border only.</p>
+  <div class="demo-live">
+    <div class="paths">
+      <p>A cached copy exists: is it still fresh?</p>
+      <section data-tone="ok"><h4>Fresh</h4><p>Younger than its max-age. Serve it from the cache with no request at all.</p></section>
+      <section><h4>Stale</h4><p>Ask the server with the ETag. A 304 reuses the copy; a 200 brings a new one.</p></section>
+      <p>The page loads</p>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="cycle">
+  <h3>Cycle</h3>
+  <p class="demo-use">Steps that repeat. Three to six steps form a ring on wide screens; otherwise a list with a loop back to the start.</p>
+  <div class="demo-live">
+    <ol class="cycle">
+      <li><b>Evaporation</b><span>the sun heats surface water</span></li>
+      <li><b>Condensation</b><span>vapor cools into clouds</span></li>
+      <li><b>Precipitation</b><span>rain or snow falls</span></li>
+      <li><b>Collection</b><span>rivers carry it back to the sea</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="cells">
+  <h3>Cells and fields</h3>
+  <p class="demo-use">Layout in memory or on disk. <code>.cells</code> is a grid of <code>--cols</code> columns; <code>.label</code> starts a row; <code>data-c</code> or <code>data-tone</code> fills a cell, solid when empty, tinted when it holds text. <code>.fields</code> is one record, each field as wide as <code>--w</code>; it turns into a list on narrow screens.</p>
+  <div class="demo-live">
+    <div class="cells" style="--cols: 16">
+      <b class="label">now</b><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-tone="warn"></i><i></i><i></i><i></i><i></i><i></i>
+      <b class="label">8 writes later</b><i data-c="3"></i><i data-c="3"></i><i data-tone="warn"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="3"></i><i data-c="3"></i><i data-c="3"></i><i data-c="3"></i><i data-c="3"></i><i data-c="3"></i>
+    </div>
+    <ul class="legend"><li data-c="1">older writes</li><li data-c="3">the last 8 writes</li><li data-tone="warn">next write lands here</li><li>empty</li></ul>
+    <ol class="fields">
+      <li style="--w: 4"><b>time_low</b><span>4 B</span></li>
+      <li style="--w: 2"><b>time_mid</b><span>2 B</span></li>
+      <li style="--w: 2" data-c="4"><b>time_hi</b><span>2 B</span></li>
+      <li style="--w: 2"><b>clock_seq</b><span>2 B</span></li>
+      <li style="--w: 6"><b>node</b><span>6 B</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="annotated">
+  <h3>Annotated figure</h3>
+  <p class="demo-use">A picture with numbered pins and a key. The art is inline SVG, an inline image or HTML; pins sit at <code>--x</code>, <code>--y</code> percentages of it.</p>
+  <div class="demo-live">
+    <figure class="annotated">
+      <div class="art">
+        <svg viewBox="0 0 640 260" role="img" aria-label="A simple circuit: a battery on the left, a switch at the top, a bulb on the right, joined by wires in a loop">
+          <rect x="120" y="50" width="400" height="160" rx="6" style="fill: none; stroke: var(--line-strong); stroke-width: 3"/>
+          <rect x="100" y="100" width="40" height="60" rx="4" style="fill: var(--card); stroke: var(--line-strong); stroke-width: 2"/>
+          <text x="120" y="135" text-anchor="middle" font-size="16">+</text>
+          <rect x="290" y="38" width="60" height="24" rx="4" style="fill: var(--bg); stroke: var(--line-strong); stroke-width: 2"/>
+          <circle cx="520" cy="130" r="26" style="fill: var(--accent-soft); stroke: var(--line-strong); stroke-width: 2"/>
+          <path d="M508 136 l6 -14 l6 14 l6 -14" style="fill: none; stroke: var(--accent); stroke-width: 2"/>
+        </svg>
+        <span class="pin" style="--x: 18.8%; --y: 30%">1</span>
+        <span class="pin" style="--x: 50%; --y: 12%">2</span>
+        <span class="pin" style="--x: 81.3%; --y: 28%">3</span>
+      </div>
+      <ol class="pins">
+        <li>The battery pushes current around the loop.</li>
+        <li>The switch breaks the loop when it opens.</li>
+        <li>The bulb turns current into light and heat.</li>
+      </ol>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="mock">
+  <h3>UI mock</h3>
+  <p class="demo-use">A screen, to show what a user sees. <code>data-frame</code>: browser or phone; <code>data-url</code> shows the address on either. Write the screen in HTML inside <code>.mock-screen</code>; kit blocks work inside it, and its controls stay out of the tab order. For a series of screens, give each <code>.mock-screen</code> the same <code>aspect-ratio</code> (say <code>9 / 16</code> for a phone) so heights match.</p>
+  <div class="demo-live">
+    <div class="mock" data-frame="browser" data-url="example.com/login">
+      <div class="mock-screen">
+        <div class="bar"><b>Sign in</b><a href="#mock">Create account</a></div>
+        <label>Email<input value="sam@example.com"></label>
+        <label>Password<input type="password" value="hunter22"></label>
+        <button class="primary">Sign in</button>
+      </div>
+    </div>
+    <div class="mock" data-frame="phone" data-url="example.com/verify">
+      <div class="mock-screen">
+        <div class="bar"><b>Check your phone</b></div>
+        <p>We sent a 6-digit code to the number ending in 42.</p>
+        <label>Code<input value="381 907"></label>
+        <button class="primary">Verify</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="mermaid">
+  <h3>Mermaid</h3>
+  <p class="demo-use">States, protocols, sequences, entity relations: diagrams whose layout a tool should compute. The source is the content and stays readable if Mermaid cannot load. Prefer a hand-built block when the layout itself carries meaning. A diagram much wider than a phone scrolls sideways there; short edge labels keep it narrow.</p>
+  <div class="demo-live">
+    <figure>
+      <pre class="mermaid">stateDiagram-v2
+  [*] --> Cart
+  Cart --> Paid: checkout
+  Paid --> Shipped: label printed
+  Paid --> Refunded: cancelled before shipping
+  Shipped --> Delivered: scanned at the door
+  Delivered --> [*]
+  Refunded --> [*]</pre>
+      <figcaption>The life of an online order.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<h2>Code and math</h2>
+
+<section class="demo" id="code">
+  <h3>Code</h3>
+  <p class="demo-use">A snippet to read or reuse. <code>language-*</code> on <code>&lt;code&gt;</code> turns on highlighting; the caption names the file. A bare <code>&lt;pre&gt;&lt;code&gt;</code> becomes this block too. Copy button included.</p>
+  <div class="demo-live">
+    <figure class="code">
+      <figcaption>src/debounce.ts</figcaption>
+<pre><code class="language-typescript">export function debounce&lt;T extends unknown[]&gt;(fn: (...args: T) =&gt; void, ms: number) {
+  let timer: ReturnType&lt;typeof setTimeout&gt; | undefined;
+  return (...args: T) =&gt; {
+    clearTimeout(timer);
+    timer = setTimeout(() =&gt; fn(...args), ms);
+  };
+}</code></pre>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="code-notes">
+  <h3>Annotated code</h3>
+  <p class="demo-use">Code where a few lines carry the idea. Each note names its lines in <code>data-lines</code> ("3", "5-6"); the lines get marked and numbered. Hovering a note lights its lines.</p>
+  <div class="demo-live">
+    <figure class="code">
+      <figcaption>search.py</figcaption>
+<pre><code class="language-python">def binary_search(items, target):
+    lo, hi = 0, len(items) - 1
+    while lo &lt;= hi:
+        mid = (lo + hi) // 2
+        if items[mid] == target:
+            return mid
+        if items[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1</code></pre>
+      <ol class="code-notes">
+        <li data-lines="4">Look at the middle of what is left.</li>
+        <li data-lines="7-10">Drop the half that cannot hold the target. Each pass halves the range, so a million items take at most 20 passes.</li>
+      </ol>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="math">
+  <h3>Formula</h3>
+  <p class="demo-use">TeX in <code>div.math</code> (display) or <code>span.math</code> (inline), rendered by KaTeX. Offline, the TeX shows as is. Escape <code>&lt;</code> and <code>&amp;</code> as entities. Display math wider than its column scrolls; break long math into aligned rows (<code>\begin{aligned}</code>) so a phone shows it whole. The second formula below scrolls on a phone.</p>
+  <div class="demo-live">
+    <div class="math">A = P\left(1 + \frac{r}{n}\right)^{nt}</div>
+    <p>With <span class="math">P = 1000</span>, <span class="math">r = 0.05</span> and yearly compounding, ten years give <span class="math">A \approx 1629</span>.</p>
+    <div class="math">(x + y)^n = \sum_{k=0}^{n} \binom{n}{k} x^{n-k} y^k = x^n + n x^{n-1} y + \binom{n}{2} x^{n-2} y^2 + \cdots + y^n</div>
+  </div>
+</section>
+
+<section class="demo" id="terminal">
+  <h3>Terminal</h3>
+  <p class="demo-use">A command and what it printed. Commands go in <code>span.cmd</code>, which adds the prompt; the rest is output.</p>
+  <div class="demo-live">
+<pre class="terminal"><span class="cmd">git log --oneline -3</span>
+a1b2c3d Fix off-by-one in pagination
+9f8e7d6 Add dark mode toggle
+4c5d6e7 Initial commit
+<span class="cmd">git status --short</span>
+ M src/app.ts</pre>
+  </div>
+</section>
+
+<h2>Interactive</h2>
+
+<section class="demo" id="tabs">
+  <h3>Tabs</h3>
+  <p class="demo-use">Alternatives a reader picks one of: languages, platforms, levels of detail. One <code>section[data-tab]</code> per tab. Arrow keys move between tabs. Without scripts every section shows under its name.</p>
+  <div class="demo-live">
+    <div class="tabs">
+      <section data-tab="JavaScript">
+        <pre><code class="language-javascript">const data = JSON.parse(await readFile('data.json', 'utf8'));</code></pre>
+      </section>
+      <section data-tab="Python">
+        <pre><code class="language-python">with open('data.json') as f:
+    data = json.load(f)</code></pre>
+      </section>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="more">
+  <h3>Collapsible</h3>
+  <p class="demo-use">Detail most readers can skip: a derivation, an edge case, the long version.</p>
+  <div class="demo-live">
+    <details class="more">
+      <summary>Why is the sky blue?</summary>
+      <p>Air molecules scatter short wavelengths far more than long ones. Blue light bounces around the whole sky and reaches your eye from every direction, while most red light passes straight through.</p>
+    </details>
+  </div>
+</section>
+
+<section class="demo" id="stepper">
+  <h3>Step-through</h3>
+  <p class="demo-use">A mechanism the reader follows one stage at a time. One <code>&lt;li&gt;</code> per step in <code>.stepper-steps</code>. Anything in <code>.stepper-stage</code> with <code>data-at</code> lights up on the steps it names ("2", "1 4", "3-"); the rest dims. Dimmed parts are translucent, so lines drawn behind them show through. <code>data-reveal</code> on the stepper hides unlit parts instead. Arrow keys step.</p>
+  <div class="demo-live">
+    <div class="stepper">
+      <div class="stepper-stage">
+        <ol class="flow">
+          <li data-at="1 4"><small>Client</small><b>SYN</b><span>here is my starting number</span></li>
+          <li data-at="2 4"><small>Server</small><b>SYN-ACK</b><span>got it, here is mine</span></li>
+          <li data-at="3 4"><small>Client</small><b>ACK</b><span>got yours too</span></li>
+        </ol>
+      </div>
+      <ol class="stepper-steps">
+        <li>The client sends SYN with a random starting sequence number.</li>
+        <li>The server answers SYN-ACK: it acknowledges the client's number and sends its own.</li>
+        <li>The client acknowledges the server's number with ACK.</li>
+        <li>Both sides now know where the other starts counting, so the connection is open. It cost one round trip.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="playground">
+  <h3>Playground</h3>
+  <p class="demo-use">How a knob changes an outcome. Range inputs in <code>.controls</code>, results in <code>.out</code>. kit.js keeps each <code>&lt;output&gt;</code> in its label in sync (<code>data-unit</code> adds a unit); a short page script computes the result.</p>
+  <div class="demo-live">
+    <div class="playground">
+      <div class="controls">
+        <label>Interest rate <output></output><input type="range" id="pg-rate" min="0" max="15" step="0.5" value="5" data-unit=" %"></label>
+        <label>Years <output></output><input type="range" id="pg-years" min="1" max="50" value="10"></label>
+      </div>
+      <div class="out">
+        <div class="stats">
+          <div class="stat"><b id="pg-total"></b><span>from $1,000, compounded yearly</span></div>
+          <div class="stat"><b id="pg-gain"></b><span>of it is interest</span></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      (() => {
+        const rate = document.getElementById('pg-rate'), years = document.getElementById('pg-years');
+        const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+        const update = () => {
+          const total = 1000 * (1 + rate.value / 100) ** years.value;
+          document.getElementById('pg-total').textContent = money.format(total);
+          document.getElementById('pg-gain').textContent = money.format(total - 1000);
+        };
+        rate.addEventListener('input', update);
+        years.addEventListener('input', update);
+        update();
+      })();
+    </script>
+  </div>
+</section>
+
+<section class="demo" id="check">
+  <h3>Self-check</h3>
+  <p class="demo-use">A question that tests what the page taught. Options are buttons, the right one has <code>data-correct</code>; the answer sits in a <code>&lt;details&gt;</code> that opens on a right pick. Options are optional: a question and its answer work alone.</p>
+  <div class="demo-live">
+    <div class="check">
+      <p>Why must the list be sorted for binary search?</p>
+      <ul>
+        <li><button>So the search can stop early</button></li>
+        <li><button data-correct>So dropping half the list never drops the target</button></li>
+        <li><button>So the middle index is easy to compute</button></li>
+      </ul>
+      <details><summary>Show answer</summary><p>In a sorted list everything left of the middle is smaller and everything right of it is larger, so one comparison tells you which half cannot hold the target.</p></details>
+    </div>
+  </div>
+</section>
+
+<h2>Build your own</h2>
+
+<section class="demo" id="custom">
+  <h3>Custom block</h3>
+  <p class="demo-use">When no block fits the shape, build one. Same box (<code>var(--card)</code>, <code>var(--border) solid var(--line)</code>, <code>var(--radius)</code>), same type sizes, colors only from tokens, tints from <code>color-mix()</code> of tokens. Inline SVG for geometry, styled with tokens; its text shrinks with the <code>viewBox</code> on a phone, so lay out labelled spans as an HTML grid, or put a wide SVG in <code>.scroll</code> with a <code>min-width</code>. Stack it at the kit's narrow breakpoint, <code>@container (max-width: 30rem)</code>, so it reflows where kit blocks do. Text on a tint: <code>--text</code> on up to 24% of a <code>--cN</code> mixed into <code>--card</code> or <code>--bg</code> passes in both themes; <code>--muted</code> on a tint does not. Put its CSS in a page <code>&lt;style&gt;</code> after the kit.</p>
+  <div class="demo-live">
+    <figure class="venn">
+      <svg viewBox="0 0 360 230" role="img" aria-label="Two overlapping sets, mammals and animals that fly. Whales and dogs are mammals only, eagles and bees fly only, bats are both.">
+        <circle cx="140" cy="125" r="88" style="fill: color-mix(in oklab, var(--c1) 18%, transparent); stroke: var(--c1)"/>
+        <circle cx="220" cy="125" r="88" style="fill: color-mix(in oklab, var(--c2) 18%, transparent); stroke: var(--c2)"/>
+        <text x="100" y="20" text-anchor="middle" font-size="13" style="fill: var(--muted)">mammals</text>
+        <text x="260" y="20" text-anchor="middle" font-size="13" style="fill: var(--muted)">animals that fly</text>
+        <text x="100" y="120" text-anchor="middle" font-size="15">whales</text>
+        <text x="100" y="142" text-anchor="middle" font-size="15">dogs</text>
+        <text x="260" y="120" text-anchor="middle" font-size="15">eagles</text>
+        <text x="260" y="142" text-anchor="middle" font-size="15">bees</text>
+        <text x="180" y="131" text-anchor="middle" font-size="15" font-weight="650">bats</text>
+      </svg>
+      <figcaption>Two overlapping sets. A shape no catalog block has, built from tokens.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="tokens">
+  <h3>Tokens</h3>
+  <p class="demo-use">The only colors a page uses. Each switches with the theme. <code>--c1</code> to <code>--c8</code> tell series apart; the tones carry meaning; <code>-soft</code> versions are backgrounds for text. <code>--shadow</code> is a see-through dark for shadows and scrims that stays dark in both themes.</p>
+  <div class="demo-live">
+    <div class="swatches"><div><i style="--s: var(--bg)"></i>--bg</div><div><i style="--s: var(--card)"></i>--card</div><div><i style="--s: var(--sunk)"></i>--sunk</div><div><i style="--s: var(--line)"></i>--line</div><div><i style="--s: var(--line-strong)"></i>--line-strong</div><div><i style="--s: var(--text)"></i>--text</div><div><i style="--s: var(--muted)"></i>--muted</div></div>
+    <div class="swatches"><div><i style="--s: var(--accent)"></i>--accent</div><div><i style="--s: var(--accent-soft)"></i>--accent-soft</div><div><i style="--s: var(--on-accent)"></i>--on-accent</div></div>
+    <div class="swatches"><div><i style="--s: var(--info)"></i>--info</div><div><i style="--s: var(--ok)"></i>--ok</div><div><i style="--s: var(--warn)"></i>--warn</div><div><i style="--s: var(--bad)"></i>--bad</div><div><i style="--s: var(--tip)"></i>--tip</div></div>
+    <div class="swatches"><div><i style="--s: var(--info-soft)"></i>--info-soft</div><div><i style="--s: var(--ok-soft)"></i>--ok-soft</div><div><i style="--s: var(--warn-soft)"></i>--warn-soft</div><div><i style="--s: var(--bad-soft)"></i>--bad-soft</div><div><i style="--s: var(--tip-soft)"></i>--tip-soft</div></div>
+    <div class="swatches"><div><i style="--s: var(--c1)"></i>--c1</div><div><i style="--s: var(--c2)"></i>--c2</div><div><i style="--s: var(--c3)"></i>--c3</div><div><i style="--s: var(--c4)"></i>--c4</div><div><i style="--s: var(--c5)"></i>--c5</div><div><i style="--s: var(--c6)"></i>--c6</div><div><i style="--s: var(--c7)"></i>--c7</div><div><i style="--s: var(--c8)"></i>--c8</div></div>
+    <div class="swatches"><div><i class="see" style="--s: var(--shadow)"></i>--shadow</div></div>
+  </div>
+</section>
+
+<section class="demo" id="helpers">
+  <h3>Helpers</h3>
+  <p class="demo-use">Small pieces any block can use. <code>.tag</code> labels a thing (color with <code>data-c</code> or <code>data-tone</code>). <code>.legend</code> keys colors. <code>.key</code> highlights the box that matters. <code>.note</code> is a small aside under a block. <code>.scroll</code> gives wide content its own sideways scroll. <code>.nowrap</code> keeps a short span on one line, such as a CLI flag in inline code. A custom box that uses <code>var(--box, var(--card))</code> and <code>var(--box-line, var(--line))</code> picks up <code>.key</code> too.</p>
+  <div class="demo-live">
+    <p><span class="tag" data-c="3">stable</span> <span class="tag" data-c="2">beta</span> <span class="tag" data-tone="bad">deprecated</span> <span class="tag">docs</span></p>
+    <ul class="legend"><li data-c="1">measured</li><li data-c="2">estimated</li><li data-tone="bad">over budget</li></ul>
+    <p>Add <code class="nowrap">--force-dark-mode</code> to render the dark theme.</p>
+    <p class="note">Figures are rounded to whole numbers.</p>
+  </div>
+</section>
+
+<section class="demo" id="api">
+  <h3>Page scripts</h3>
+  <p class="demo-use">For a custom visual that draws with JavaScript. Put the script after kit.js. <code>kit.color('accent')</code> returns a token as hex for the current theme. <code>kit.load('chart' | 'mermaid' | 'katex' | 'hljs')</code> loads a library once. <code>kit.chart(canvas, color =&gt; config)</code> draws any Chart.js chart and redraws it on theme change. Listen for <code>kit:theme</code> on <code>document</code> to redraw anything else. A page in another language sets <code>window.kitLabels</code> in a script before the kit.js tag, since kit.js reads it once (keys: <code>contents</code>, <code>back</code>, <code>next</code>, <code>step</code> as <code>"Step {n} of {total}"</code>, <code>copy</code>, <code>copied</code>, <code>right</code>, <code>wrong</code>, <code>data</code>, <code>toDark</code>, <code>toLight</code>), plus <code>lang</code> and <code>dir</code> on <code>&lt;html&gt;</code>.</p>
+  <div class="demo-live">
+    <figure>
+      <canvas id="api-demo" role="img" aria-label="A sine wave drawn with kit.color" height="120" style="width: 100%; height: 120px"></canvas>
+      <figcaption>A canvas drawing that recolors itself when the theme changes.</figcaption>
+    </figure>
+    <script>
+      addEventListener('DOMContentLoaded', () => {
+        const cv = document.getElementById('api-demo');
+        const draw = () => {
+          const g = cv.getContext('2d'), w = cv.width = cv.clientWidth * devicePixelRatio, h = cv.height = 120 * devicePixelRatio;
+          g.clearRect(0, 0, w, h);
+          g.strokeStyle = kit.color('line'); g.lineWidth = devicePixelRatio;
+          g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+          g.strokeStyle = kit.color('accent'); g.lineWidth = 2.5 * devicePixelRatio;
+          g.beginPath();
+          for (let x = 0; x <= w; x += 2) g.lineTo(x, h / 2 - Math.sin(x / w * Math.PI * 4) * h * 0.38);
+          g.stroke();
+        };
+        draw();
+        document.addEventListener('kit:theme', draw);
+        addEventListener('resize', draw);
+      });
+    </script>
+  </div>
+</section>
+</main>
+<script>
+  document.querySelectorAll('.demo-live').forEach(live => {
+    const lines = live.innerHTML.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n');
+    const indent = Math.min(...lines.filter(l => l.trim()).map(l => l.match(/^ */)[0].length));
+    const markup = lines.map(l => l.slice(indent)).join('\n');
+    const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'demo-copy', textContent: 'Copy markup' });
+    btn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(markup); btn.textContent = 'Copied'; } catch { btn.textContent = 'Copy failed'; }
+      setTimeout(() => { btn.textContent = 'Copy markup'; }, 1500);
+    });
+    live.parentElement.querySelector('h3').append(btn);
+  });
+</script>
+<script src="kit.js"></script>
+</body>
+</html>

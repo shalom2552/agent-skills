@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+kit=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+[ "$#" -gt 0 ] || { echo "usage: inline PAGE..." >&2; exit 2; }
+status=0
+for page in "$@"; do
+  if ! grep -q 'href="kit\.css"' "$page" || ! grep -q 'src="kit\.js"' "$page"; then
+    echo "inline: no kit.css link or kit.js script tag in $page" >&2
+    status=1
+    continue
+  fi
+  tmp=$(mktemp)
+  awk -v css="$kit/kit.css" -v js="$kit/kit.js" '
+    /<link[^>]*href="kit\.css"[^>]*>/ { print "<style>"; while ((getline l < css) > 0) print l; print "</style>"; next }
+    /<script[^>]*src="kit\.js"[^>]*><\/script>/ { print "<script>"; while ((getline l < js) > 0) print l; print "</script>"; next }
+    { print }
+  ' "$page" > "$tmp"
+  cat "$tmp" > "$page"
+  rm -f "$tmp"
+  echo "inlined $page"
+done
+exit "$status"
