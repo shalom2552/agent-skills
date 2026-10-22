@@ -26,6 +26,7 @@
 .demo-live > .swatches + .swatches { margin-top: 0.5rem; }
 .venn svg { display: block; width: 100%; max-width: 26rem; margin-inline: auto; }
 .venn circle { stroke-width: 2; }
+@media print { .demo-copy { display: none; } }
 </style>
 </head>
 <body>
@@ -38,9 +39,9 @@
 <ul class="index">
   <li><a href="#callout">Callout</a></li><li><a href="#stats">Stat tiles</a></li><li><a href="#glossary">Glossary</a></li><li><a href="#term">Term tooltip</a></li>
   <li><a href="#table">Table</a></li><li><a href="#compare">Comparison</a></li><li><a href="#parts">Proportion bar</a></li><li><a href="#chart">Chart</a></li><li><a href="#matrix">2x2 matrix</a></li>
-  <li><a href="#flow">Flow</a></li><li><a href="#layers">Layer stack</a></li><li><a href="#timeline">Timeline</a></li><li><a href="#tree">Tree</a></li><li><a href="#paths">Branches</a></li><li><a href="#cycle">Cycle</a></li><li><a href="#cells">Cells and fields</a></li><li><a href="#annotated">Annotated figure</a></li><li><a href="#mock">UI mock</a></li><li><a href="#mermaid">Mermaid</a></li>
-  <li><a href="#code">Code</a></li><li><a href="#code-notes">Annotated code</a></li><li><a href="#math">Formula</a></li><li><a href="#terminal">Terminal</a></li>
-  <li><a href="#tabs">Tabs</a></li><li><a href="#more">Collapsible</a></li><li><a href="#stepper">Step-through</a></li><li><a href="#playground">Playground</a></li><li><a href="#check">Self-check</a></li>
+  <li><a href="#flow">Flow</a></li><li><a href="#layers">Layer stack</a></li><li><a href="#timeline">Timeline</a></li><li><a href="#tree">Tree</a></li><li><a href="#paths">Branches</a></li><li><a href="#cycle">Cycle</a></li><li><a href="#cells">Cells and fields</a></li><li><a href="#cases">Small multiples</a></li><li><a href="#ba">Before and after</a></li><li><a href="#annotated">Annotated figure</a></li><li><a href="#mock">UI mock</a></li><li><a href="#mermaid">Mermaid</a></li>
+  <li><a href="#code">Code</a></li><li><a href="#code-notes">Annotated code</a></li><li><a href="#diff">Code diff</a></li><li><a href="#math">Formula</a></li><li><a href="#terminal">Terminal</a></li>
+  <li><a href="#tabs">Tabs</a></li><li><a href="#more">Collapsible</a></li><li><a href="#popover">Popover note</a></li><li><a href="#stepper">Step-through</a></li><li><a href="#scrub">Scrub bar</a></li><li><a href="#playground">Playground</a></li><li><a href="#reactive">Reactive sentence</a></li><li><a href="#linked">Linked highlight</a></li><li><a href="#self-check">Self-check</a></li><li><a href="#predict">Predict, then reveal</a></li>
   <li><a href="#custom">Custom block</a></li><li><a href="#tokens">Tokens</a></li><li><a href="#helpers">Helpers</a></li><li><a href="#api">Page scripts</a></li>
 </ul>
 
@@ -182,13 +183,15 @@
 
 <section class="demo" id="flow">
   <h3>Flow</h3>
-  <p class="demo-use">A sequence or pipeline. Up to four stages run across a wide column; more, or a narrow column, stack downward. Each stage: optional <code>&lt;small&gt;</code> label, <code>&lt;b&gt;</code> name, <code>&lt;span&gt;</code> detail. <code>data-c</code> or <code>data-tone</code> on a stage colors its edge. Keep names to a word or two: four stages across get narrow cards.</p>
+  <p class="demo-use">A sequence or pipeline. Up to four stages run across a wide column, five or more wrap in rows of three, and a narrow column stacks them downward. Each stage: optional <code>&lt;small&gt;</code> label, <code>&lt;b&gt;</code> name, <code>&lt;span&gt;</code> detail. <code>data-c</code> or <code>data-tone</code> on a stage colors its edge. Keep names to a word or two: four stages across get narrow cards.</p>
   <div class="demo-live">
     <ol class="flow">
       <li><small>Look up</small><b>DNS</b><span>turns the name into an IP address</span></li>
-      <li data-tone="warn"><small>Connect</small><b>TCP and TLS</b><span>two round trips before any data</span></li>
+      <li data-tone="warn"><small>Connect</small><b>TCP</b><span>one round trip to open</span></li>
+      <li data-tone="warn"><small>Secure</small><b>TLS</b><span>one more before any data</span></li>
       <li><small>Request</small><b>HTTP GET</b><span>the server answers with HTML</span></li>
-      <li><small>Render</small><b>Browser</b><span>parses, fetches assets, paints</span></li>
+      <li><small>Parse</small><b>DOM</b><span>builds the tree, fetches assets</span></li>
+      <li><small>Render</small><b>Paint</b><span>lays out and draws pixels</span></li>
     </ol>
   </div>
 </section>
@@ -268,7 +271,7 @@
 
 <section class="demo" id="cells">
   <h3>Cells and fields</h3>
-  <p class="demo-use">Layout in memory or on disk. <code>.cells</code> is a grid of <code>--cols</code> columns; <code>.label</code> starts a row; <code>data-c</code> or <code>data-tone</code> fills a cell, solid when empty, tinted when it holds text. <code>.fields</code> is one record, each field as wide as <code>--w</code>; it turns into a list on narrow screens.</p>
+  <p class="demo-use">Layout in memory or on disk. <code>.cells</code> is a grid of <code>--cols</code> columns; <code>.label</code> starts a row; <code>data-c</code> or <code>data-tone</code> fills a cell, solid when empty, tinted when it holds text. <code>.fields</code> is one record, each field as wide as <code>--w</code>; on narrow screens it turns into a list, and a bar under each row keeps its share.</p>
   <div class="demo-live">
     <div class="cells" style="--cols: 16">
       <b class="label">now</b><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-c="1"></i><i data-tone="warn"></i><i></i><i></i><i></i><i></i><i></i>
@@ -285,19 +288,58 @@
   </div>
 </section>
 
+<section class="demo" id="cases">
+  <h3>Small multiples</h3>
+  <p class="demo-use">Cases or scenarios side by side: one mini figure per case, drawn the same way, so the eye reads only what differs. Each case is a <code>&lt;figure&gt;</code> in <code>.cases</code>; any kit block works inside. The caption says the outcome in words, led by a <code>.tag</code> for the status, so color is never the only cue. Three to six cases; they wrap to fit.</p>
+  <div class="demo-live">
+    <div class="cases">
+      <figure>
+        <div class="cells"><i data-c="1">a</i><i></i><i></i><i data-tone="ok">k</i><i></i><i data-c="1">b</i><i></i><i></i></div>
+        <figcaption><span class="tag" data-tone="ok">1 probe</span>Key k hashes to slot 4, which is free.</figcaption>
+      </figure>
+      <figure>
+        <div class="cells"><i data-c="1">a</i><i></i><i></i><i data-c="1">c</i><i data-tone="warn">k</i><i data-c="1">b</i><i></i><i></i></div>
+        <figcaption><span class="tag" data-tone="warn">2 probes</span>Slot 4 holds c, so k moves on to slot 5.</figcaption>
+      </figure>
+      <figure>
+        <div class="cells"><i data-c="1">a</i><i></i><i></i><i data-c="1">c</i><i data-c="1">d</i><i data-c="1">e</i><i data-tone="bad">k</i><i></i></div>
+        <figcaption><span class="tag" data-tone="bad">4 probes</span>A run of full slots, 4 to 6, pushes k to slot 7.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="demo" id="ba">
+  <h3>Before and after</h3>
+  <p class="demo-use">Two states of one figure, to show what a change does. The radio pair in <code>.ba-pick</code> picks the state; <code>.ba-stage</code> holds the two states in the same order, stacked in one spot so nothing jumps. No script: it works by CSS alone, and arrow keys switch. Each state's <code>data-label</code> names it in print, where both show. For two things side by side, use Comparison instead.</p>
+  <div class="demo-live">
+    <figure class="ba">
+      <div class="ba-pick">
+        <label><input type="radio" name="ba-insert" checked>Before</label>
+        <label><input type="radio" name="ba-insert">After insert</label>
+      </div>
+      <div class="ba-stage">
+        <div class="cells" data-label="Before"><i>a</i><i>b</i><i>c</i><i>d</i><i>e</i><i></i><i></i><i></i></div>
+        <div class="cells" data-label="After insert"><i>a</i><i>b</i><i data-tone="ok">X</i><i data-c="2">c</i><i data-c="2">d</i><i data-c="2">e</i><i></i><i></i></div>
+      </div>
+      <figcaption>Inserting X at index 2 moves c, d and e one slot right: an array insert costs a shift of everything after it.</figcaption>
+    </figure>
+  </div>
+</section>
+
 <section class="demo" id="annotated">
   <h3>Annotated figure</h3>
-  <p class="demo-use">A picture with numbered pins and a key. The art is inline SVG, an inline image or HTML; pins sit at <code>--x</code>, <code>--y</code> percentages of it.</p>
+  <p class="demo-use">A picture with numbered pins and a key. The art is inline SVG, an inline image or HTML; pins sit at <code>--x</code>, <code>--y</code> percentages of it. SVG parts take token colors from classes: <code>.box</code>, <code>.wire</code>, <code>.hi</code>, <code>.tint</code>, <code>.ink</code>, <code>.muted</code> (see Helpers).</p>
   <div class="demo-live">
     <figure class="annotated">
       <div class="art">
         <svg viewBox="0 0 640 260" role="img" aria-label="A simple circuit: a battery on the left, a switch at the top, a bulb on the right, joined by wires in a loop">
-          <rect x="120" y="50" width="400" height="160" rx="6" style="fill: none; stroke: var(--line-strong); stroke-width: 3"/>
-          <rect x="100" y="100" width="40" height="60" rx="4" style="fill: var(--card); stroke: var(--line-strong); stroke-width: 2"/>
+          <rect class="wire" x="120" y="50" width="400" height="160" rx="6" stroke-width="3"/>
+          <rect class="box" x="100" y="100" width="40" height="60" rx="4" stroke-width="2"/>
           <text x="120" y="135" text-anchor="middle" font-size="16">+</text>
-          <rect x="290" y="38" width="60" height="24" rx="4" style="fill: var(--bg); stroke: var(--line-strong); stroke-width: 2"/>
-          <circle cx="520" cy="130" r="26" style="fill: var(--accent-soft); stroke: var(--line-strong); stroke-width: 2"/>
-          <path d="M508 136 l6 -14 l6 14 l6 -14" style="fill: none; stroke: var(--accent); stroke-width: 2"/>
+          <rect class="box" x="290" y="38" width="60" height="24" rx="4" stroke-width="2"/>
+          <circle class="hi" cx="520" cy="130" r="26" stroke-width="2"/>
+          <path class="wire" data-c="2" d="M508 136 l6 -14 l6 14 l6 -14" stroke-width="2"/>
         </svg>
         <span class="pin" style="--x: 18.8%; --y: 30%">1</span>
         <span class="pin" style="--x: 50%; --y: 12%">2</span>
@@ -381,7 +423,7 @@
 <pre><code class="language-python">def binary_search(items, target):
     lo, hi = 0, len(items) - 1
     while lo &lt;= hi:
-        mid = (lo + hi) // 2
+        mid = (lo + hi) // 2  # Python ints never overflow; in C or Java write lo + (hi - lo) // 2
         if items[mid] == target:
             return mid
         if items[mid] &lt; target:
@@ -393,6 +435,21 @@
         <li data-lines="4">Look at the middle of what is left.</li>
         <li data-lines="7-10">Drop the half that cannot hold the target. Each pass halves the range, so a million items take at most 20 passes.</li>
       </ol>
+    </figure>
+  </div>
+</section>
+
+<section class="demo" id="diff">
+  <h3>Code diff</h3>
+  <p class="demo-use">What a change does to code. Add <code>diff</code> to a <code>.code</code> figure and start each line with <code>+</code> (added), <code>-</code> (removed) or a space (kept); kit.js tints the lines, and the signs stay as text, so print and color-blind readers still see them. Use the code's own <code>language-*</code>, not <code>language-diff</code>. Keep a few kept lines around each change for context.</p>
+  <div class="demo-live">
+    <figure class="code diff">
+      <figcaption>stats.py</figcaption>
+<pre><code class="language-python"> def mean(xs):
+-    return sum(xs) / len(xs)
++    if not xs:
++        return 0.0
++    return sum(xs) / len(xs)</code></pre>
     </figure>
   </div>
 </section>
@@ -424,7 +481,7 @@ a1b2c3d Fix off-by-one in pagination
 
 <section class="demo" id="tabs">
   <h3>Tabs</h3>
-  <p class="demo-use">Alternatives a reader picks one of: languages, platforms, levels of detail. One <code>section[data-tab]</code> per tab. Arrow keys move between tabs. Without scripts every section shows under its name.</p>
+  <p class="demo-use">Alternatives a reader picks one of: languages, platforms, levels of detail. One <code>section[data-tab]</code> per tab. Arrow keys move between tabs. Without scripts, and in print, every section shows under its name. A row wider than the column scrolls, with a shadow at the edge that hides more; on a phone that starts at about four tabs.</p>
   <div class="demo-live">
     <div class="tabs">
       <section data-tab="JavaScript">
@@ -433,6 +490,15 @@ a1b2c3d Fix off-by-one in pagination
       <section data-tab="Python">
         <pre><code class="language-python">with open('data.json') as f:
     data = json.load(f)</code></pre>
+      </section>
+      <section data-tab="Go">
+        <pre><code class="language-go">raw, err := os.ReadFile("data.json")</code></pre>
+      </section>
+      <section data-tab="Rust">
+        <pre><code class="language-rust">let raw = std::fs::read_to_string("data.json")?;</code></pre>
+      </section>
+      <section data-tab="Shell">
+        <pre><code class="language-bash">jq . data.json</code></pre>
       </section>
     </div>
   </div>
@@ -449,9 +515,18 @@ a1b2c3d Fix off-by-one in pagination
   </div>
 </section>
 
+<section class="demo" id="popover">
+  <h3>Popover note</h3>
+  <p class="demo-use">A footnote or aside the reader opens in place. A <code>button.fn</code> with <code>popovertarget</code> opens the <code>aside.pop[popover]</code> with that id; a click outside or Escape closes it. No script. Give the button an <code>aria-label</code> ("Note 1"); put the aside right after the paragraph, since that is where it prints, and start its text with the same number. It sits under the button where the browser can anchor it, else mid-screen. For one-word definitions, Term tooltip is lighter.</p>
+  <div class="demo-live">
+    <p>Sunlight takes about 8 minutes 20 seconds to reach Earth.<button class="fn" popovertarget="fn-sun" aria-label="Note 1">1</button></p>
+    <aside class="pop" id="fn-sun" popover><p>1. The Sun is 149.6 million km away on average; at 299,792 km/s that is 499 seconds.</p></aside>
+  </div>
+</section>
+
 <section class="demo" id="stepper">
   <h3>Step-through</h3>
-  <p class="demo-use">A mechanism the reader follows one stage at a time. One <code>&lt;li&gt;</code> per step in <code>.stepper-steps</code>. Anything in <code>.stepper-stage</code> with <code>data-at</code> lights up on the steps it names ("2", "1 4", "3-"); the rest dims. Dimmed parts are translucent, so lines drawn behind them show through. <code>data-reveal</code> on the stepper hides unlit parts instead. Arrow keys step.</p>
+  <p class="demo-use">A mechanism the reader follows one stage at a time. One <code>&lt;li&gt;</code> per step in <code>.stepper-steps</code>. Anything in <code>.stepper-stage</code> with <code>data-at</code> lights up on the steps it names ("2", "1 4", "3-"): kit boxes take the accent fill, and the rest dims. Dimmed parts are translucent, so lines drawn behind them show through. <code>data-reveal</code> on the stepper hides unlit parts instead. Arrow keys step. Print shows every step and every part.</p>
   <div class="demo-live">
     <div class="stepper">
       <div class="stepper-stage">
@@ -471,40 +546,85 @@ a1b2c3d Fix off-by-one in pagination
   </div>
 </section>
 
+<section class="demo" id="scrub">
+  <h3>Scrub bar</h3>
+  <p class="demo-use">A step-through with five or more steps, where a reader wants to jump or replay. <code>data-scrub</code> on <code>.stepper</code> adds a slider over the steps and a Play button that moves one step every 1.8 seconds and stops at the end; any other control stops it. It never plays on its own. Print and no-script readers get every step, as in Step-through.</p>
+  <div class="demo-live">
+    <div class="stepper" data-scrub>
+      <div class="stepper-stage">
+        <div class="cells"><i data-at="1">2</i><i data-at="1">5</i><i data-at="1">8</i><i data-at="1">12</i><i data-at="1">16</i><i data-at="1">23</i><i data-at="1">38</i><i data-at="1">45</i><i data-at="1-2">51</i><i data-at="1-2">56</i><i data-at="1-2">67</i><i data-at="1-2">72</i><i data-at="1-">79</i><i data-at="1-3">84</i><i data-at="1-3">91</i><i data-at="1-3">99</i></div>
+      </div>
+      <ol class="stepper-steps">
+        <li>Find 79 in 16 sorted values. All 16 are in range; the middle is 45.</li>
+        <li>45 is less than 79, so the left half goes. 8 left; the middle is 72.</li>
+        <li>72 is less than 79, so 4 left: 79, 84, 91, 99. The middle is 84.</li>
+        <li>84 is more than 79, so only 79 is left.</li>
+        <li>Found on the fourth probe. 16 values never take more than 4, since 2<sup>4</sup> = 16.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
 <section class="demo" id="playground">
   <h3>Playground</h3>
-  <p class="demo-use">How a knob changes an outcome. Range inputs in <code>.controls</code>, results in <code>.out</code>. kit.js keeps each <code>&lt;output&gt;</code> in its label in sync (<code>data-unit</code> adds a unit); a short page script computes the result.</p>
+  <p class="demo-use">How a knob changes an outcome. Range inputs in <code>.controls</code>, results in <code>.out</code>. Put the <code>&lt;output&gt;</code> after the input, so the label names the slider; kit.js keeps it in sync (<code>data-unit</code> adds a unit). Give each input a <code>name</code> and each result a <code>data-out</code>, and compute them with <code>kit.model</code> as in Reactive sentence. The markup holds the default values as text, so print and no-script readers get true numbers; make the default the real value.</p>
   <div class="demo-live">
-    <div class="playground">
+    <div class="playground" id="savings">
       <div class="controls">
-        <label>Interest rate <output></output><input type="range" id="pg-rate" min="0" max="15" step="0.5" value="5" data-unit=" %"></label>
-        <label>Years <output></output><input type="range" id="pg-years" min="1" max="50" value="10"></label>
+        <label>Interest rate <input type="range" name="rate" min="0" max="15" step="0.5" value="5" data-unit=" %"><output>5 %</output></label>
+        <label>Years <input type="range" name="years" min="1" max="50" value="10"><output>10</output></label>
       </div>
       <div class="out">
         <div class="stats">
-          <div class="stat"><b id="pg-total"></b><span>from $1,000, compounded yearly</span></div>
-          <div class="stat"><b id="pg-gain"></b><span>of it is interest</span></div>
+          <div class="stat"><b data-out="total">$1,629</b><span>from $1,000, compounded yearly</span></div>
+          <div class="stat"><b data-out="gain">$629</b><span>of it is interest</span></div>
         </div>
       </div>
     </div>
     <script>
-      (() => {
-        const rate = document.getElementById('pg-rate'), years = document.getElementById('pg-years');
+      addEventListener('DOMContentLoaded', () => kit.model(document.getElementById('savings'), v => {
         const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-        const update = () => {
-          const total = 1000 * (1 + rate.value / 100) ** years.value;
-          document.getElementById('pg-total').textContent = money.format(total);
-          document.getElementById('pg-gain').textContent = money.format(total - 1000);
-        };
-        rate.addEventListener('input', update);
-        years.addEventListener('input', update);
-        update();
-      })();
+        const total = 1000 * (1 + v.rate / 100) ** v.years;
+        return { total: money.format(total), gain: money.format(total - 1000) };
+      }));
     </script>
   </div>
 </section>
 
-<section class="demo" id="check">
+<section class="demo" id="reactive">
+  <h3>Reactive sentence</h3>
+  <p class="demo-use">A claim whose numbers the reader can push. Inside <code>.reactive</code>, each input has a <code>name</code> and an <code>aria-label</code>, and every number that follows from it has <code>data-out</code>. One page function, <code>kit.model(box, values =&gt; outputs)</code>, takes the inputs by name (or id) and returns text for each <code>data-out</code>; a returned number also sets <code>--name</code> on the box, for a figure to use. The markup holds the default values as text, so print and no-script readers get a true sentence; make the default the real value. One to three inputs.</p>
+  <div class="demo-live">
+    <div class="reactive" id="moon-drive">
+      <p>Driving nonstop to the Moon at <input type="range" name="speed" min="50" max="300" step="10" value="100" aria-label="Speed in km/h"><output data-out="speed">100</output>&nbsp;km/h takes <output data-out="days">160</output>&nbsp;days.</p>
+      <div class="stats">
+        <div class="stat"><b data-out="hours">3,844&nbsp;h</b><span>at the wheel, for 384,400&nbsp;km</span></div>
+        <div class="stat"><b data-out="years">0.4&nbsp;years</b><span>of nonstop driving</span></div>
+      </div>
+    </div>
+    <script>
+      addEventListener('DOMContentLoaded', () => kit.model(document.getElementById('moon-drive'), v => {
+        const hours = 384400 / v.speed;
+        return { speed: v.speed, days: Math.round(hours / 24), hours: Math.round(hours).toLocaleString('en-US') + '\u00a0h', years: (hours / 24 / 365).toFixed(1) + '\u00a0years' };
+      }));
+    </script>
+  </div>
+</section>
+
+<section class="demo" id="linked">
+  <h3>Linked highlight</h3>
+  <p class="demo-use">Prose that points at parts of a figure. Give a word in the text <code>class="ref"</code> and a <code>data-ref</code> name, and give the matching parts of the figure the same <code>data-ref</code>. Hovering or focusing either lights every match: kit boxes take the accent fill, other elements an outline, SVG shapes a thick accent line. The words are in the tab order; the figure parts only respond to hover. The prose must make sense alone, since that is what print and screen readers get.</p>
+  <div class="demo-live">
+    <p>A load checks the <span class="ref" data-ref="l1">L1 cache</span> first, about 1&nbsp;ns away. On a miss it goes to <span class="ref" data-ref="ram">RAM</span>, about 100 times slower.</p>
+    <ol class="flow">
+      <li><small>Asks</small><b>CPU core</b><span>needs one value</span></li>
+      <li data-ref="l1"><small>~1 ns</small><b>L1 cache</b><span>a few dozen KB</span></li>
+      <li data-ref="ram"><small>~100 ns</small><b>RAM</b><span>gigabytes</span></li>
+    </ol>
+  </div>
+</section>
+
+<section class="demo" id="self-check">
   <h3>Self-check</h3>
   <p class="demo-use">A question that tests what the page taught. Options are buttons, the right one has <code>data-correct</code>; the answer sits in a <code>&lt;details&gt;</code> that opens on a right pick. Options are optional: a question and its answer work alone.</p>
   <div class="demo-live">
@@ -520,6 +640,25 @@ a1b2c3d Fix off-by-one in pagination
   </div>
 </section>
 
+<section class="demo" id="predict">
+  <h3>Predict, then reveal</h3>
+  <p class="demo-use">A Self-check asked before the answer, for a result that surprises. A guess makes the reveal stick. <code>.check.predict</code> holds a <code>fieldset</code> of radio choices (one has <code>data-correct</code>), each with a <code>.why</code> line that shows once it is picked, then a <code>.reveal</code> with the figure or answer that shows after any pick. It works by CSS alone; kit.js adds a spoken verdict. Start each <code>.why</code> with "Right" or "No", so the verdict is in words, not only color. Print shows every reason and the reveal.</p>
+  <div class="demo-live">
+    <div class="check predict">
+      <fieldset>
+        <legend>With no air, a 1&nbsp;kg ball and a 10&nbsp;kg ball drop from 100&nbsp;m. Which lands first?</legend>
+        <label><input type="radio" name="pr-drop">The 10&nbsp;kg ball<span class="why">No. Ten times the pull, but also ten times the mass to move.</span></label>
+        <label><input type="radio" name="pr-drop" data-correct>Both at once<span class="why">Right. Gravity gives every mass the same acceleration.</span></label>
+        <label><input type="radio" name="pr-drop">The 1&nbsp;kg ball<span class="why">No. Lighter does not mean faster without air.</span></label>
+      </fieldset>
+      <div class="reveal">
+        <div class="stats"><div class="stat"><b>4.5&nbsp;s</b><span>to fall 100&nbsp;m, for any mass</span></div></div>
+        <p>Air is what makes a feather slow. On the Moon, Apollo 15's David Scott dropped a hammer and a feather, and they landed together.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <h2>Build your own</h2>
 
 <section class="demo" id="custom">
@@ -528,10 +667,10 @@ a1b2c3d Fix off-by-one in pagination
   <div class="demo-live">
     <figure class="venn">
       <svg viewBox="0 0 360 230" role="img" aria-label="Two overlapping sets, mammals and animals that fly. Whales and dogs are mammals only, eagles and bees fly only, bats are both.">
-        <circle cx="140" cy="125" r="88" style="fill: color-mix(in oklab, var(--c1) 18%, transparent); stroke: var(--c1)"/>
-        <circle cx="220" cy="125" r="88" style="fill: color-mix(in oklab, var(--c2) 18%, transparent); stroke: var(--c2)"/>
-        <text x="100" y="20" text-anchor="middle" font-size="13" style="fill: var(--muted)">mammals</text>
-        <text x="260" y="20" text-anchor="middle" font-size="13" style="fill: var(--muted)">animals that fly</text>
+        <circle class="tint" data-c="1" cx="140" cy="125" r="88"/>
+        <circle class="tint" data-c="2" cx="220" cy="125" r="88"/>
+        <text class="muted" x="100" y="20" text-anchor="middle" font-size="13">mammals</text>
+        <text class="muted" x="260" y="20" text-anchor="middle" font-size="13">animals that fly</text>
         <text x="100" y="120" text-anchor="middle" font-size="15">whales</text>
         <text x="100" y="142" text-anchor="middle" font-size="15">dogs</text>
         <text x="260" y="120" text-anchor="middle" font-size="15">eagles</text>
@@ -558,7 +697,7 @@ a1b2c3d Fix off-by-one in pagination
 
 <section class="demo" id="helpers">
   <h3>Helpers</h3>
-  <p class="demo-use">Small pieces any block can use. <code>.tag</code> labels a thing (color with <code>data-c</code> or <code>data-tone</code>). <code>.legend</code> keys colors. <code>.key</code> highlights the box that matters. <code>.note</code> is a small aside under a block. <code>.scroll</code> gives wide content its own sideways scroll. <code>.nowrap</code> keeps a short span on one line, such as a CLI flag in inline code. A custom box that uses <code>var(--box, var(--card))</code> and <code>var(--box-line, var(--line))</code> picks up <code>.key</code> too.</p>
+  <p class="demo-use">Small pieces any block can use. <code>.tag</code> labels a thing (color with <code>data-c</code> or <code>data-tone</code>). <code>.legend</code> keys colors. <code>.key</code> highlights the box that matters. <code>.note</code> is a small aside under a block. <code>.scroll</code> gives wide content its own sideways scroll. <code>.nowrap</code> keeps a short span on one line, such as a CLI flag in inline code. A custom box that uses <code>var(--box, var(--card))</code> and <code>var(--box-line, var(--line))</code> picks up <code>.key</code> too. In inline SVG, classes color shapes from tokens and leave stroke width to the shape's <code>stroke-width</code>: <code>.box</code> (card fill, strong line), <code>.wire</code> (line only, <code>data-c</code> or <code>data-tone</code> recolors it), <code>.hi</code> (accent), <code>.tint</code> (a light fill of <code>data-c</code> or <code>data-tone</code> with its color as the line), <code>.ink</code> and <code>.muted</code> (text).</p>
   <div class="demo-live">
     <p><span class="tag" data-c="3">stable</span> <span class="tag" data-c="2">beta</span> <span class="tag" data-tone="bad">deprecated</span> <span class="tag">docs</span></p>
     <ul class="legend"><li data-c="1">measured</li><li data-c="2">estimated</li><li data-tone="bad">over budget</li></ul>
@@ -569,7 +708,7 @@ a1b2c3d Fix off-by-one in pagination
 
 <section class="demo" id="api">
   <h3>Page scripts</h3>
-  <p class="demo-use">For a custom visual that draws with JavaScript. Put the script after kit.js. <code>kit.color('accent')</code> returns a token as hex for the current theme. <code>kit.load('chart' | 'mermaid' | 'katex' | 'hljs')</code> loads a library once. <code>kit.chart(canvas, color =&gt; config)</code> draws any Chart.js chart and redraws it on theme change. Listen for <code>kit:theme</code> on <code>document</code> to redraw anything else. A page in another language sets <code>window.kitLabels</code> in a script before the kit.js tag, since kit.js reads it once (keys: <code>contents</code>, <code>back</code>, <code>next</code>, <code>step</code> as <code>"Step {n} of {total}"</code>, <code>copy</code>, <code>copied</code>, <code>right</code>, <code>wrong</code>, <code>data</code>, <code>toDark</code>, <code>toLight</code>), plus <code>lang</code> and <code>dir</code> on <code>&lt;html&gt;</code>.</p>
+  <p class="demo-use">For a custom visual that draws with JavaScript. Put the script after kit.js. <code>kit.color('accent')</code> returns a token as hex for the current theme; <code>kit.color('accent', 'light')</code> for the light one, which a canvas can use to redraw on <code>beforeprint</code>, since print is light (kit charts do this already). <code>kit.model(box, fn)</code> wires a Reactive sentence, and works for a Playground too. <code>kit.load('chart' | 'mermaid' | 'katex' | 'hljs')</code> loads a library once. <code>kit.chart(canvas, color =&gt; config)</code> draws any Chart.js chart and redraws it on theme change. Listen for <code>kit:theme</code> on <code>document</code> to redraw anything else. A script that shows hidden content of its own (a picker, a panel) dispatches <code>document.dispatchEvent(new Event('kit:shown'))</code> after showing it, so Mermaid inside gets drawn; kit tabs, steps and <code>&lt;details&gt;</code> do this already. A page in another language sets <code>window.kitLabels</code> in a script before the kit.js tag, since kit.js reads it once (keys: <code>contents</code>, <code>back</code>, <code>next</code>, <code>step</code> as <code>"Step {n} of {total}"</code>, <code>steps</code>, <code>play</code>, <code>pause</code>, <code>copy</code>, <code>copied</code>, <code>right</code>, <code>wrong</code>, <code>data</code>, <code>toDark</code>, <code>toLight</code>), plus <code>lang</code> and <code>dir</code> on <code>&lt;html&gt;</code>.</p>
   <div class="demo-live">
     <figure>
       <canvas id="api-demo" role="img" aria-label="A sine wave drawn with kit.color" height="120" style="width: 100%; height: 120px"></canvas>

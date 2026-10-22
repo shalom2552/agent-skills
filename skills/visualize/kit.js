@@ -5,7 +5,7 @@
   root.classList.add('js');
 
   const L = Object.assign({
-    contents: 'Contents', back: 'Back', next: 'Next', step: 'Step {n} of {total}',
+    contents: 'Contents', back: 'Back', next: 'Next', step: 'Step {n} of {total}', steps: 'Steps', play: 'Play', pause: 'Pause',
     copy: 'Copy', copied: 'Copied', right: 'Correct', wrong: 'Not quite', data: 'Data',
     toDark: 'Switch to dark theme', toLight: 'Switch to light theme',
   }, window.kitLabels);
@@ -41,7 +41,8 @@
   probe.hidden = true;
   d.body.append(probe);
   const px = d.createElement('canvas').getContext('2d', { willReadFrequently: true });
-  const color = name => {
+  const color = (name, scheme = '') => {
+    probe.style.colorScheme = scheme;
     probe.style.color = `var(--${name.replace(/^--/, '')})`;
     px.clearRect(0, 0, 1, 1);
     px.fillStyle = getComputedStyle(probe).color;
@@ -170,8 +171,9 @@
   const numberLines = fig => {
     const code = fig.querySelector('pre code') || fig.querySelector('pre');
     const notes = $$(':scope > .code-notes > li', fig);
-    if (!code || (!notes.length && !fig.classList.contains('numbered'))) return;
-    fig.classList.add('numbered');
+    const diff = fig.classList.contains('diff');
+    if (!code || (!notes.length && !diff && !fig.classList.contains('numbered'))) return;
+    if (notes.length) fig.classList.add('numbered');
     const lines = [];
     let open = [], cur = '';
     for (const m of code.innerHTML.replace(/\n$/, '').matchAll(/(<\/?span[^>]*>)|([^<]+)|(<[^>]*>)/g)) {
@@ -184,6 +186,7 @@
     }
     lines.push(cur + '</span>'.repeat(open.length));
     code.innerHTML = lines.map((l, i) => `<span class="line" data-n="${i + 1}">${l || ' '}</span>`).join('');
+    if (diff) [...code.children].forEach(l => l.classList.add({ '+': 'add', '-': 'del' }[l.textContent[0]] || 'same'));
     const row = n => code.children[n - 1];
     notes.forEach((li, k) => {
       const rows = ranges(li.dataset.lines, lines.length);
@@ -241,9 +244,25 @@
     const [prev, out, next] = bar.children;
     prev.textContent = L.back;
     next.textContent = L.next;
-    let cur = 0;
+    let cur = 0, timer = 0, scrub, play;
+    const stop = () => { clearInterval(timer); timer = 0; if (play) play.textContent = L.play; };
+    if (st.hasAttribute('data-scrub')) {
+      scrub = Object.assign(d.createElement('input'), { type: 'range', min: 1, max: steps.length, value: 1 });
+      scrub.setAttribute('aria-label', L.steps);
+      scrub.addEventListener('input', () => { stop(); show(scrub.value - 1); });
+      play = Object.assign(d.createElement('button'), { type: 'button', textContent: L.play });
+      play.addEventListener('click', () => {
+        if (timer) return stop();
+        if (cur === steps.length - 1) show(0);
+        play.textContent = L.pause;
+        timer = setInterval(() => { show(cur + 1); if (cur === steps.length - 1) stop(); }, 1800);
+      });
+      bar.prepend(scrub);
+      next.before(play);
+    }
     const show = i => {
       cur = Math.max(0, Math.min(i, steps.length - 1));
+      if (scrub) { scrub.value = cur + 1; scrub.setAttribute('aria-valuetext', L.step.replace('{n}', cur + 1).replace('{total}', steps.length)); }
       steps.forEach((s, j) => s.classList.toggle('now', j === cur));
       lit.forEach(el => el.classList.toggle('lit', inRange(el.dataset.at, cur + 1)));
       st.dataset.step = cur + 1;
@@ -254,14 +273,15 @@
       if (lost && d.activeElement.disabled) (prev.disabled ? next : prev).focus();
       d.dispatchEvent(new Event('kit:shown'));
     };
-    prev.addEventListener('click', () => show(cur - 1));
-    next.addEventListener('click', () => show(cur + 1));
+    prev.addEventListener('click', () => { stop(); show(cur - 1); });
+    next.addEventListener('click', () => { stop(); show(cur + 1); });
     st.addEventListener('keydown', e => {
       if (e.target.closest('input, select, textarea, [role="tab"]')) return;
       const rtl = getComputedStyle(st).direction === 'rtl';
       const step = { ArrowRight: rtl ? -1 : 1, ArrowLeft: rtl ? 1 : -1 }[e.key];
       if (!step) return;
       e.preventDefault();
+      stop();
       show(cur + step);
     });
     st.append(bar);
@@ -333,6 +353,56 @@
     });
   }));
 
+  run(() => $$('.predict > fieldset').forEach(set => {
+    const verdict = Object.assign(d.createElement('p'), { className: 'verdict' });
+    verdict.setAttribute('aria-live', 'polite');
+    set.after(verdict);
+    set.addEventListener('change', e => {
+      const ok = e.target.hasAttribute('data-correct');
+      verdict.className = 'verdict ' + (ok ? 'right' : 'wrong');
+      verdict.textContent = ok ? L.right : L.wrong;
+    });
+  }));
+
+  run(() => {
+    $$('.ref[data-ref]').forEach(el => {
+      if (el.matches('a, button, input, [tabindex]')) return;
+      el.tabIndex = 0;
+      if (!el.role) el.role = 'button';
+    });
+    const on = { hover: null, focus: null };
+    const light = key => e => {
+      const ref = e.type.endsWith('out') ? null : e.target.closest?.('[data-ref]')?.dataset.ref ?? null;
+      if (on[key] === ref) return;
+      on[key] = ref;
+      $$('[data-ref]').forEach(el => el.classList.toggle('on', el.dataset.ref === on.hover || el.dataset.ref === on.focus));
+    };
+    d.addEventListener('mouseover', light('hover'));
+    d.addEventListener('mouseout', e => { if (!e.relatedTarget) light('hover')(e); });
+    ['focusin', 'focusout'].forEach(t => d.addEventListener(t, light('focus')));
+  });
+
+  const model = (box, fn) => {
+    const inputs = $$('input:is([name], [id]), select:is([name], [id])', box);
+    const update = () => run(() => {
+      const v = Object.fromEntries(inputs.map(i => [i.name || i.id, i.type === 'range' || i.type === 'number' ? +i.value : i.type === 'checkbox' ? i.checked : i.value]));
+      for (const [k, x] of Object.entries(fn(v) || {})) {
+        if (typeof x === 'number') box.style.setProperty('--' + k, x);
+        $$(`[data-out="${k}"]`, box).forEach(el => { el.textContent = typeof x === 'number' ? x.toLocaleString(root.lang || undefined) : x; });
+      }
+    });
+    $$('output', box).forEach(o => o.setAttribute('aria-live', 'off'));
+    const say = Object.assign(d.createElement('span'), { className: 'say' });
+    say.setAttribute('aria-live', 'polite');
+    box.append(say);
+    inputs.forEach(i => {
+      i.addEventListener('input', update);
+      i.addEventListener('change', () => { say.textContent = ''; say.textContent = box.innerText; });
+    });
+    update();
+    return update;
+  };
+
   run(() => $$('.parts').forEach(p => {
     const items = $$(':scope > ol > li', p);
     const values = items.map(li => parseFloat(String(li.dataset.value ?? li.querySelector('b')?.textContent ?? '').replace(/[^\d.eE+-]/g, '')) || 0);
@@ -399,6 +469,15 @@
     new ResizeObserver(draw).observe(c);
   }));
 
+  run(() => $$('.fields').forEach(f => {
+    const items = $$(':scope > li', f), w = items.map(li => parseFloat(getComputedStyle(li).getPropertyValue('--w')) || 1);
+    const sum = w.reduce((a, b) => a + b, 0);
+    items.forEach((li, i) => li.style.setProperty('--share', w[i] / sum));
+  }));
+
+  addEventListener('beforeprint', () => $$('details:not([open])').forEach(el => { if (!el.closest('.toc, .chart')) { el.open = true; el.dataset.printOpen = ''; } }));
+  addEventListener('afterprint', () => $$('details[data-print-open]').forEach(el => { el.open = false; delete el.dataset.printOpen; }));
+
   run(() => $$('.mock :is(button, input, select, textarea)').forEach(el => { el.tabIndex = -1; }));
 
   run(() => $$('input[type="range"]').forEach(r => {
@@ -438,10 +517,12 @@
   };
   let drawing = Promise.resolve();
   const drawGraphs = () => drawing = drawing.then(async () => {
-    const todo = graphs.filter(g => g.getClientRects().length && g.dataset.theme !== theme());
+    let todo = graphs.filter(g => g.getClientRects().length && g.dataset.theme !== theme());
     if (!todo.length) return;
     const mermaid = await load('mermaid');
     await fontsReady();
+    todo = todo.filter(g => g.getClientRects().length);
+    if (!todo.length) return;
     const c = color, isDark = theme() === 'dark';
     mermaid.initialize({
       startOnLoad: false, securityLevel: 'strict', theme: 'base', fontFamily: family('--font'),
@@ -484,13 +565,13 @@
   }
 
   const charts = [];
-  const paintChart = ch => { ch.inst?.destroy(); ch.inst = new window.Chart(ch.canvas, ch.make(color)); return ch.inst; };
-  const styleCharts = Chart => {
+  const paintChart = (ch, c = color) => { ch.inst?.destroy(); ch.inst = new window.Chart(ch.canvas, ch.make(c)); return ch.inst; };
+  const styleCharts = (Chart, c = color) => {
     Chart.defaults.font.family = family('--font');
     Chart.defaults.font.size = 13;
-    Chart.defaults.color = color('muted');
-    Chart.defaults.borderColor = color('line');
-    Object.assign(Chart.defaults.plugins.legend.labels, { color: color('text'), boxWidth: 12, boxHeight: 12 });
+    Chart.defaults.color = c('muted');
+    Chart.defaults.borderColor = c('line');
+    Object.assign(Chart.defaults.plugins.legend.labels, { color: c('text'), boxWidth: 12, boxHeight: 12 });
   };
   const gap = s => /^[\s—–?−-]*$|^n\/?a$/i.test(s);
   const isNum = s => /^\D{0,3}?[−+-]?\d[\d,.\s]*(e[+-]?\d+)?\s*\D{0,4}$/i.test(s);
@@ -598,12 +679,21 @@
       paintChart(ch);
     }));
   }).catch(() => {});
-  themed.push(() => { if (!window.Chart) return; styleCharts(window.Chart); charts.forEach(paintChart); });
+  const repaint = (c = color) => { if (!window.Chart || !charts.length) return; styleCharts(window.Chart, c); charts.forEach(ch => paintChart(ch, c)); };
+  themed.push(() => repaint());
+  addEventListener('beforeprint', () => {
+    if (theme() !== 'dark') return;
+    run(() => repaint(n => color(n, 'light')));
+  });
+  addEventListener('afterprint', () => {
+    if (theme() !== 'dark') return;
+    run(() => repaint());
+  });
 
   fontsReady().then(() => $$('.scroll, main pre, .tree, .terminal, div.math').forEach(scrollable));
 
   window.kit = {
-    color, load, theme, labels: L,
+    color, load, theme, model, labels: L,
     chart: (canvas, make) => load('chart').then(async Chart => {
       await fontsReady();
       styleCharts(Chart);

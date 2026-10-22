@@ -90,7 +90,13 @@ main pre:not(.mermaid, .terminal):not(.code pre) { background: var(--card); bord
 figure { margin: 0; }
 figcaption { font-size: 0.875rem; color: var(--muted); margin-top: 0.5rem; }
 svg { color: var(--text); }
-svg text:not([fill]) { fill: currentColor; }
+svg :where(text:not([fill])) { fill: currentColor; }
+svg .ink { fill: var(--text); }
+svg .muted { fill: var(--muted); }
+svg .box { fill: var(--card); stroke: var(--line-strong); }
+svg .wire { fill: none; stroke: var(--c, var(--line-strong)); }
+svg .hi { fill: var(--accent-soft); stroke: var(--accent); }
+svg .tint { fill: color-mix(in oklab, var(--c, var(--accent)) 18%, transparent); stroke: var(--c, var(--accent)); }
 svg text:not([font-family]) { font-family: var(--font); }
 
 .page-head, main, .toc { width: min(var(--measure), 100% - 2rem); margin-inline: auto; }
@@ -128,7 +134,7 @@ main > :first-child, main > section > :first-child { margin-top: 0; }
 [data-tone="bad"] { --tone: var(--bad); --tone-soft: var(--bad-soft); --c: var(--bad); }
 [data-tone="tip"] { --tone: var(--tip); --tone-soft: var(--tip-soft); --c: var(--tip); }
 
-.scroll, div.math, pre.mermaid.rendered {
+.scroll, div.math, pre.mermaid.rendered, .tabs [role="tablist"] {
   --cover: var(--bg);
   overflow-x: auto;
   background:
@@ -137,14 +143,14 @@ main > :first-child, main > section > :first-child { margin-top: 0; }
     radial-gradient(farthest-side at 0 50%, color-mix(in oklab, var(--text) 25%, transparent), transparent) left / 0.75rem 100% no-repeat scroll,
     radial-gradient(farthest-side at 100% 50%, color-mix(in oklab, var(--text) 25%, transparent), transparent) right / 0.75rem 100% no-repeat scroll;
 }
-:is(.compare > *, .matrix > *, .paths > *, .stepper, .playground, .check, details.more) :is(.scroll, div.math, pre.mermaid.rendered) { --cover: var(--card); }
+:is(.compare > *, .matrix > *, .paths > *, .cases > *, .stepper, .playground, .check, details.more) :is(.scroll, div.math, pre.mermaid.rendered, .tabs [role="tablist"]) { --cover: var(--card); }
 .note { font-size: 0.875rem; color: var(--muted); }
 .nowrap { white-space: nowrap; }
 .tag { display: inline-block; font-size: 0.75rem; font-weight: 650; line-height: 1.5; padding: 0 0.5rem; border-radius: 999px; background: color-mix(in oklab, var(--c, var(--accent)) 20%, var(--bg)); color: var(--text); white-space: nowrap; vertical-align: 0.1em; }
 .legend { list-style: none; padding: 0; margin: 0.625rem 0 0; display: flex; flex-wrap: wrap; gap: 0.25rem 1.125rem; font-size: 0.875rem; color: var(--muted); }
 .legend li { margin: 0; }
 .legend li::before { content: ""; display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 3px; background: var(--c, var(--line-strong)); margin-inline-end: 0.4rem; vertical-align: -0.05em; }
-.key { --box: var(--accent-soft); --box-line: var(--accent); }
+.key { --box: linear-gradient(var(--accent), var(--accent)) top / 100% 3px no-repeat var(--card); }
 .key .tag { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c, var(--accent)) 60%, transparent); }
 
 :where(.callout) { --tone: var(--info); --tone-soft: var(--info-soft); }
@@ -154,8 +160,9 @@ main > :first-child, main > section > :first-child { margin-top: 0; }
 .callout > p:first-child > :is(b, strong):first-child { color: var(--tone); }
 
 .stats { display: flex; flex-wrap: wrap; gap: 0.625rem; }
-.stat { flex: 1 1 9.5rem; background: var(--box, var(--card)); border: var(--border) solid var(--box-line, var(--line)); border-radius: var(--radius); padding: 0.75rem 0.875rem; display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+.stat { container-type: inline-size; flex: 1 1 9.5rem; background: var(--box, var(--card)); border: var(--border) solid var(--box-line, var(--line)); border-radius: var(--radius); padding: 0.75rem 0.875rem; display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
 .stat > b { font-size: 1.625rem; line-height: 1.15; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+@container (max-width: 10rem) { .stat > b { font-size: 1.375rem; } }
 .stat > span { font-size: 0.875rem; line-height: 1.4; color: var(--muted); }
 
 .glossary { border-top: 1px solid var(--line); }
@@ -226,8 +233,10 @@ caption { caption-side: bottom; text-align: start; font-size: 0.875rem; color: v
 @container (min-width: 36rem) {
   .flow:not(:has(> li:nth-child(5))) { flex-direction: row; gap: 2rem; }
   .flow:not(:has(> li:nth-child(5))) > li { flex: 1 1 0; }
-  .flow:not(:has(> li:nth-child(5))) > li + li::before { content: "\2192"; top: 0; bottom: 0; height: auto; inset-inline: -2rem auto; width: 2rem; }
-  .flow:not(:has(> li:nth-child(5))) > li + li:dir(rtl)::before { content: "\2190"; }
+  .flow:has(> li:nth-child(5)) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.75rem 2rem; }
+  .flow > li + li::before { content: "\2192"; top: 0; bottom: 0; height: auto; inset-inline: -2rem auto; width: 2rem; }
+  .flow > li + li:dir(rtl)::before { content: "\2190"; }
+  .flow:has(> li:nth-child(5)) > li:nth-child(3n+1)::before { display: none; }
 }
 
 .layers { list-style: none; padding: 0; display: grid; gap: 0.375rem; }
@@ -323,7 +332,8 @@ caption { caption-side: bottom; text-align: start; font-size: 0.875rem; color: v
 .fields > li:is([data-c], [data-tone]) > span { color: var(--text); }
 @container (max-width: 30rem) {
   .fields { flex-direction: column; gap: 2px; }
-  .fields > li { flex: none; flex-direction: row; justify-content: space-between; gap: 0.75rem; text-align: start; padding: 0.375rem 0.625rem; }
+  .fields > li { flex: none; flex-direction: row; justify-content: space-between; gap: 0.75rem; text-align: start; padding: 0.375rem 0.625rem; position: relative; overflow: hidden; }
+  .fields > li::after { content: ""; position: absolute; inset-inline-start: 0; bottom: 0; height: 3px; width: calc(var(--share) * 100%); background: var(--c, var(--line-strong)); }
 }
 
 .annotated .art { position: relative; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); overflow: hidden; }
@@ -355,7 +365,9 @@ pre.mermaid.rendered > svg { height: auto; }
 .copy { position: absolute; z-index: 1; top: 0.3rem; inset-inline-end: 0.3rem; font: 600 0.75rem/1 var(--font); color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 0.4rem 0.6rem; cursor: pointer; }
 .copy:hover { color: var(--text); border-color: var(--line-strong); }
 @media (hover: hover) { .code:not(:has(> figcaption)) .copy { opacity: 0; } .code:hover .copy, .code .copy:focus-visible { opacity: 1; } }
+@media (hover: none) { .code:not(:has(> figcaption)) pre { padding-top: 2.25rem; } }
 .code pre .line { display: block; padding-inline: 1rem; margin-inline: -1rem; }
+.code pre code { display: block; width: max-content; min-width: 100%; }
 .code.numbered pre .line::before { content: attr(data-n); display: inline-block; width: 2.25ch; margin-inline-end: 1.25ch; text-align: end; color: var(--muted); opacity: 0.7; user-select: none; }
 .code pre .line.mark { background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
 .code pre .line.hot { background: color-mix(in oklab, var(--accent) 28%, var(--card)); }
@@ -410,6 +422,7 @@ details.more > :last-child { margin-bottom: 0; }
 .js .stepper-steps > li { margin: 0; min-height: 3.2em; }
 .js .stepper-steps > li:not(.now) { display: none; }
 .stepper-stage { margin-bottom: 1rem; }
+.stepper .lit { --box: var(--accent-soft); --box-line: var(--accent); }
 .js .stepper [data-at] { transition: opacity 0.2s, visibility 0.2s; }
 .js .stepper [data-at]:not(.lit) { opacity: 0.28; }
 .js .stepper[data-reveal] [data-at]:not(.lit) { opacity: 0; visibility: hidden; }
@@ -423,6 +436,7 @@ details.more > :last-child { margin-bottom: 0; }
 .playground .controls { display: grid; gap: 0.875rem; align-content: start; }
 .playground label { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 0.125rem 0.75rem; font-size: 0.9375rem; }
 .playground label > input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0.25rem 0 0; accent-color: var(--accent); min-height: 1.5rem; }
+.playground label > output { grid-area: 1 / 2; }
 .playground output { font-weight: 650; color: var(--accent); font-variant-numeric: tabular-nums; }
 .playground .out { min-width: 0; }
 .playground .out > :first-child { margin-top: 0; }
@@ -441,3 +455,76 @@ details.more > :last-child { margin-bottom: 0; }
 .check .verdict.wrong { color: var(--bad); }
 .check > details > summary { color: var(--accent); font-weight: 650; cursor: pointer; }
 .check > details > :not(summary) { margin: 0.5rem 0 0; }
+.predict > fieldset { border: 0; margin: 0 0 0.875rem; padding: 0; display: grid; gap: 0.375rem; min-width: 0; }
+.predict > fieldset > legend { font-weight: 650; padding: 0; margin-bottom: 0.5rem; }
+.predict > fieldset > label { display: grid; grid-template-columns: auto 1fr; gap: 0.125rem 0.625rem; align-items: baseline; background: var(--bg); border: var(--border) solid var(--line-strong); border-radius: var(--radius-sm); padding: 0.45rem 0.9rem; cursor: pointer; }
+.predict > fieldset > label:hover { border-color: var(--accent); }
+.predict > fieldset > label > input { accent-color: var(--accent); margin: 0; }
+.predict .why { grid-column: 2; font-size: 0.875rem; }
+.predict label:not(:has(:checked)) .why, .predict:not(:has(:checked)) .reveal { display: none; }
+.predict label:has(:checked) { border-color: var(--bad); background: var(--bad-soft); }
+.predict:has(:checked) label:has([data-correct]) { border-color: var(--ok); }
+.predict label:has([data-correct]:checked) { background: var(--ok-soft); }
+.predict .reveal { border-top: 1px solid var(--line); padding-top: 0.875rem; }
+.predict .reveal > :last-child { margin-bottom: 0; }
+
+.reactive input[type="range"] { width: 7rem; max-width: 40%; margin: 0 0.25rem; vertical-align: middle; accent-color: var(--accent); }
+.say { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.reactive output, .reactive [data-out] { font-weight: 650; color: var(--accent); font-variant-numeric: tabular-nums; }
+:root:not(.js) .reactive input[type="range"] { display: none; }
+
+.js .ref { text-decoration: underline solid color-mix(in oklab, var(--accent) 45%, transparent); text-decoration-thickness: 2px; text-underline-offset: 0.22em; cursor: default; border-radius: 3px; }
+[data-ref].on { --box: var(--accent-soft); --box-line: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.ref.on { background: var(--accent-soft); outline-offset: 1px; }
+svg [data-ref].on { outline: 0; }
+svg [data-ref].on:not(text) { stroke: var(--accent); stroke-width: 3px; }
+svg text[data-ref].on { fill: var(--accent); font-weight: 700; }
+
+.stepper-bar input[type="range"] { order: -1; flex: 1 0 100%; margin: 0 0 0.25rem; accent-color: var(--accent); min-height: 1.5rem; }
+.stepper-bar:has(input) { flex-wrap: wrap; }
+
+.cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--gap); }
+.cases > * { container-type: inline-size; background: var(--box, var(--card)); border: var(--border) solid var(--box-line, var(--line)); border-radius: var(--radius); padding: 0.75rem 0.875rem; min-width: 0; margin: 0; }
+.cases > * > figcaption { color: var(--text); margin-top: 0.625rem; }
+.cases > * > figcaption > .tag { margin-inline-end: 0.375rem; }
+.cases > * > :first-child { margin-top: 0; }
+
+.ba-pick { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; padding: 0.25rem; margin-bottom: 0.75rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); }
+.ba-pick > label { position: relative; font-size: 0.9375rem; padding: 0.35rem 0.875rem; border-radius: var(--radius-sm); cursor: pointer; color: var(--muted); }
+.ba-pick > label:hover { color: var(--text); }
+.ba-pick > label:has(:checked) { background: var(--accent-soft); color: var(--text); font-weight: 650; }
+.ba-pick > label:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ba-pick input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.ba-stage { display: grid; }
+.ba-stage > * { grid-area: 1 / 1; min-width: 0; }
+.ba:has(.ba-pick > :first-child :checked) .ba-stage > :last-child, .ba:has(.ba-pick > :last-child :checked) .ba-stage > :first-child { visibility: hidden; }
+
+.fn { font: 700 0.75rem/1 var(--font); color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 999px; min-width: 1.5rem; min-height: 1.5rem; padding: 0 0.375rem; margin-inline: 0.125rem; vertical-align: 0.3em; cursor: pointer; }
+.fn:hover { color: var(--on-accent); background: var(--accent); }
+.pop { margin: auto; max-width: min(21rem, calc(100vw - 1.5rem)); background: var(--card); color: var(--text); border: var(--border) solid var(--line-strong); border-radius: var(--radius-sm); padding: 0.625rem 0.875rem; font-size: 0.875rem; line-height: 1.45; box-shadow: 0 0.5rem 1.5rem var(--shadow); }
+.pop > :last-child { margin-bottom: 0; }
+@supports (position-area: bottom) { .pop { margin: 0.375rem 0.75rem; position-anchor: auto; position-area: bottom span-all; position-try-fallbacks: flip-block; } }
+
+.code.diff pre .line.add { background: var(--ok-soft); box-shadow: inset 3px 0 var(--ok); }
+.code.diff pre .line.del { background: var(--bad-soft); box-shadow: inset 3px 0 var(--bad); }
+
+@media print {
+  :root, :root[data-theme] { color-scheme: light; }
+  .theme, .toc, .tip, .copy, .stepper-bar, .tabs [role="tablist"] { display: none !important; }
+  .tabs > section[hidden] { display: block !important; }
+  .tabs > section::before { content: attr(data-tab); display: block; font-weight: 650; margin: 0.5rem 0; }
+  .js .stepper-steps { list-style: decimal; padding-inline-start: 1.25rem; }
+  .js .stepper-steps > li:not(.now) { display: list-item; min-height: 0; }
+  .js .stepper [data-at]:not(.lit), .js .stepper[data-reveal] [data-at]:not(.lit) { opacity: 1; visibility: visible; }
+  .stepper .lit { --box: initial; --box-line: initial; }
+  .term[data-tip]::after { content: " (" attr(data-tip) ")"; color: var(--muted); }
+  .chart-box { height: auto; }
+  .chart-box canvas, pre.mermaid.rendered > svg { max-width: 100% !important; height: auto !important; }
+  pre.mermaid.rendered[data-theme="dark"] > svg { filter: invert(1) hue-rotate(180deg); }
+  .predict .why, .predict .reveal { display: block !important; }
+  .reactive input[type="range"] { display: none; }
+  .ba-pick { display: none; }
+  .ba-stage > * { grid-area: auto; visibility: visible !important; }
+  .ba-stage > [data-label]::before { content: attr(data-label); display: block; font-weight: 650; margin: 0.5rem 0; }
+  .pop[popover] { display: block; position: static; inset: auto; margin: 0.5rem 0 1rem; max-width: none; box-shadow: none; }
+}
