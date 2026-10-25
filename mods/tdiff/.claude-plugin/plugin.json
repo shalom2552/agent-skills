@@ -1,0 +1,9 @@
+{
+  "name": "tdiff",
+  "version": "0.1.0",
+  "description": "/tdiff: a live pane of every file Claude changed this session, with net diffs that survive resume.",
+  "author": {
+    "name": "shalom2552"
+  },
+  "types": "./types/index.d.ts"
+}

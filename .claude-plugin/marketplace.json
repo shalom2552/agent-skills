@@ -7,6 +7,7 @@
         { "name": "frame", "source": "./mods/frame" },
         { "name": "beat", "source": "./mods/beat" },
         { "name": "statusline", "source": "./mods/statusline" },
-        { "name": "badges", "source": "./mods/badges" }
+        { "name": "badges", "source": "./mods/badges" },
+        { "name": "tdiff", "source": "./mods/tdiff" }
     ]
 }
