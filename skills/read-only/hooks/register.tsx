@@ -5,9 +5,30 @@ import type { Mode } from '../types'
 
 export const TOOL = 'mcp__read-only__mode'
 
+const SESSIONS = 'sessions'
+const MAX_SESSIONS = 20
+
 const mode = atom({ plugin: 'read-only', key: 'mode' } as const, 'off' as Mode)
 
-const set = ($: EngineInterface, next: Mode) => update($, mode, () => next)
+const savedOf = (raw: unknown): Record<string, unknown> =>
+  typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {}
+
+const save = async ($: EngineInterface, next: Mode) => {
+  const id = await $.session.id()
+  const saved = savedOf(await $.store.get(SESSIONS))
+  delete saved[id]
+  const kept = Object.entries(saved).slice(1 - MAX_SESSIONS)
+  await $.store.set(SESSIONS, Object.fromEntries(next === 'off' ? kept : [...kept, [id, next]]))
+}
+
+const restore = async ($: EngineInterface) => {
+  if (savedOf(await $.store.get(SESSIONS))[await $.session.id()] === 'read-only') await update($, mode, () => 'read-only')
+}
+
+const set = async ($: EngineInterface, next: Mode) => {
+  await update($, mode, () => next)
+  if (next !== 'apply') await save($, next).catch(() => undefined)
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -21,6 +42,13 @@ export const register: Register = on => {
         required: ['mode'],
       },
     })
+    await restore($).catch(() => undefined)
+
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') await update($, mode, () => 'off')
 
     return next(e)
   })
@@ -58,33 +86,37 @@ export const register: Register = on => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const isApply = current === 'apply'
+    const rest = await next(e)
 
     return (
-      <Box gap={1}>
-        <Text bold inverse color={isApply ? 'warning' : 'planMode'}>
-          {isApply ? ' APPLY ' : ' READ-ONLY '}
-        </Text>
-        {!e.props.isWorking && !isApply && (
-          <Button
-            variant="primary"
-            key="apply"
-            label="Apply"
-            onPress={async () => {
-              await set($, 'apply')
-              void $.prompt.submit({ text: 'Apply that.', asUser: true })
-            }}
-          />
-        )}
-        {!e.props.isWorking && (
-          <Button
-            key="exit"
-            label="Exit"
-            onPress={async () => {
-              await set($, 'off')
-              void $.prompt.submit({ text: 'Leave read-only.', asUser: true })
-            }}
-          />
-        )}
+      <Box flexDirection="column">
+        <Box gap={1}>
+          <Text bold inverse color={isApply ? 'warning' : 'planMode'}>
+            {isApply ? ' APPLY ' : ' READ-ONLY '}
+          </Text>
+          {!e.props.isWorking && !isApply && (
+            <Button
+              variant="primary"
+              key="apply"
+              label="Apply"
+              onPress={async () => {
+                await set($, 'apply')
+                void $.prompt.submit({ text: 'Apply that.', asUser: true })
+              }}
+            />
+          )}
+          {!e.props.isWorking && (
+            <Button
+              key="exit"
+              label="Exit"
+              onPress={async () => {
+                await set($, 'off')
+                void $.prompt.submit({ text: 'Leave read-only.', asUser: true })
+              }}
+            />
+          )}
+        </Box>
+        {rest}
       </Box>
     )
   })

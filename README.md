@@ -38,6 +38,7 @@ Claude Code plugins.
 | `frame` | Rounded frame around your prompts. |
 | `beat` | Turn time and usage as pills. |
 | `statusline` | Bottom status line for claude. |
+| `badges` | Badge above the prompt for each active session skill. |
 
 ## Settings
 

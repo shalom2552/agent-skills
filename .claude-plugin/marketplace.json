@@ -6,6 +6,7 @@
         { "name": "tape", "source": "./mods/tape" },
         { "name": "frame", "source": "./mods/frame" },
         { "name": "beat", "source": "./mods/beat" },
-        { "name": "statusline", "source": "./mods/statusline" }
+        { "name": "statusline", "source": "./mods/statusline" },
+        { "name": "badges", "source": "./mods/badges" }
     ]
 }
