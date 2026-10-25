@@ -1,8 +1,8 @@
 import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { labelOf, targetOf } from '../hooks/register'
-import { textOf } from './text-of'
+import { flatten, labelOf, targetOf, wrapText } from '../hooks/register'
+import { hiddenTextOf, textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
 
@@ -28,12 +28,19 @@ const PANE: RenderInput<'Pane'> = {
   },
 }
 
-function world(on: On) {
+function world(on: On, entries?: Record<string, unknown>) {
   const panes: UiPane[] = []
+  const session = { id: 's1' }
   const clock = mock.clock(on, { now: 0 })
+  const store = new Map<string, unknown>(Object.entries(entries ?? {}))
+  on('store.get', ($, e) => ({ value: store.get(e.key) }))
+  on('store.set', ($, e) => (store.set(e.key, e.value), { value: undefined }))
+  on('store.delete', ($, e) => (store.delete(e.key), { value: undefined }))
+  on('store.keys', () => ({ value: [...store.keys()] }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
+  on('session.id', () => ({ value: session.id }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('ui.panes', () => ({ value: [...panes] }))
@@ -45,14 +52,74 @@ function world(on: On) {
     panes.splice(panes.findIndex(p => p.id === e.id), 1)
     return { value: undefined }
   })
-  return { panes, clock }
+  return { panes, clock, session, store }
 }
+
+const saved = (id: string, turn: number, file: string, status = 'ok') => ({
+  [`calls:${id}`]: [{ id: `c-${id}`, turn, tool: 'Read', target: file, isAgent: false, startedAt: 0, endedAt: 1, status }],
+  [`turns:${id}`]: [{ n: turn, prompt: `prompt ${id}` }],
+})
 
 describe('register', () => {
   test('target picks the first known field, relative to cwd', () => {
     expect(targetOf({ file_path: '/work/src/a.ts' }, '/work')).toBe('src/a.ts')
-    expect(targetOf({ command: '\n  npm test\nmore' }, '/work')).toBe('npm test')
+    expect(targetOf({ command: '\n  npm test\nmore' }, '/work')).toBe('npm test ⏎ more')
+    expect(targetOf({ command: '  ', description: 'list' }, '/work')).toBe('list')
     expect(targetOf({ other: 1 }, '/work')).toBe('')
+  })
+
+  test('flatten joins lines, collapses space and strips cwd', () => {
+    expect(flatten('cat <<EOF\n  a   b\n\nEOF', '/work')).toBe('cat <<EOF ⏎ a b ⏎ EOF')
+    expect(flatten('cd /work && npm test', '/work')).toBe('npm test')
+    expect(flatten('cd "/work"; ls', '/work')).toBe('ls')
+    expect(flatten('cd /work\nls', '/work')).toBe('ls')
+    expect(flatten('cd /work/sub && ls', '/work')).toBe('cd sub && ls')
+    expect(flatten('cat /work/a "/work/b" x=/work/c', '/work')).toBe('cat a "b" x=c')
+    expect(flatten('ls /other/work/a /workspace/b', '/work')).toBe('ls /other/work/a /workspace/b')
+    expect(flatten('a.b', 'a.b')).toBe('a.b')
+    expect(Array.from(flatten('x'.repeat(5000), '/work'))).toHaveLength(1000)
+  })
+
+  test('wrapText breaks at spaces, hard-breaks long words', () => {
+    expect(wrapText('npm run test --watch', 10)).toEqual(['npm run', 'test', '--watch'])
+    expect(wrapText('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+    expect(wrapText('abcd efgh', 4)).toEqual(['abcd', 'efgh'])
+    expect(wrapText('', 4)).toEqual([])
+    expect(wrapText('😀😀😀', 2)).toEqual(['😀😀', '😀'])
+  })
+
+  test('long commands show three lines and reveal the rest on hover', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    const words = Array.from({ length: 60 }, (_, i) => `w${i}`)
+    await $.tool.call({ tool: 'Bash', command: `cd /work && echo ${words.join(' ')}` })
+
+    const tree = await $.ui.render(PANE)
+    const text = textOf(tree)
+    expect(text).toContain('✓$')
+    expect(text).toContain('echo w0')
+    expect(text).not.toContain('/work')
+    expect(text).toMatch(/\+\d+/)
+    expect(hiddenTextOf(tree)).toContain('w59')
+    expect(hiddenTextOf(tree)).not.toContain('w0 ')
+  })
+
+  test('older turns collapse behind hover, failures stay counted', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'Read' }, () => ({ result: 'x', isError: true }) as never)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'one', turnId: 't1' })
+    await $.tool.call({ tool: 'Read', file_path: '/work/old.ts' })
+    await $.turn.start({ text: 'two', turnId: 't2' })
+    await $.tool.call({ tool: 'Bash', command: 'ls new' })
+
+    const tree = await $.ui.render(PANE)
+    expect(textOf(tree)).toContain('✗1')
+    expect(hiddenTextOf(tree)).toContain('old.ts')
+    expect(hiddenTextOf(tree)).not.toContain('ls new')
   })
 
   test('turn label skips engine markup', () => {
@@ -102,13 +169,59 @@ describe('register', () => {
   })
 
   test('/clear empties the tape', async ($, on) => {
-    world(on)
+    const w = world(on)
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
     await $.turn.start({ text: 'x', turnId: 't1' })
     await $.tool.call({ tool: 'Bash', command: 'ls' })
-    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+    w.session.id = 's2'
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
 
     expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
+  })
+
+  test('calls are saved and come back after a restart', async ($, on) => {
+    const w = world(on, saved('s1', 4, 'kept.ts', 'running'))
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+
+    const tree = await $.ui.render(PANE)
+    expect(textOf(tree)).toContain('Turn 4')
+    expect(textOf(tree)).toContain('✗Read')
+    expect(textOf(tree)).toContain('kept.ts')
+
+    await $.turn.start({ text: 'next', turnId: 't5' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+    expect(w.store.get('calls:s1')).toHaveLength(2)
+    expect(w.store.get('turns:s1')).toEqual([
+      { n: 4, prompt: 'prompt s1' },
+      { n: 5, prompt: 'next' },
+    ])
+  })
+
+  test('resume swaps to that session’s tape', async ($, on) => {
+    const w = world(on, saved('s2', 1, 'other.ts'))
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'mine', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls mine' })
+
+    w.session.id = 's2'
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('other.ts')
+    expect(text).not.toContain('ls mine')
+    expect(w.store.get('calls:s1')).toHaveLength(1)
+  })
+
+  test('keeps only the last five sessions', async ($, on) => {
+    const old = ['a', 'b', 'c', 'd', 'e']
+    const w = world(on, { sessions: old, ...old.reduce((all, id) => ({ ...all, ...saved(id, 1, `${id}.ts`) }), {}) })
+    await $.session.start(SESSION)
+
+    expect(w.store.get('sessions')).toEqual(['b', 'c', 'd', 'e', 's1'])
+    expect(w.store.get('calls:a')).toBeUndefined()
+    expect(w.store.get('turns:a')).toBeUndefined()
+    expect(w.store.get('calls:b')).toHaveLength(1)
   })
 })
