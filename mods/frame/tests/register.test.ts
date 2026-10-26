@@ -71,10 +71,21 @@ describe('register', () => {
     expect(unwrapPastes('plain')).toBe('plain')
   })
 
-  test('a long prompt shows its head and tail', () => {
-    const long = `${'a'.repeat(2_500)}${'\n'.repeat(3)}${'b'.repeat(6_000)}${'c'.repeat(2_500)}`
-    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hiddenLines: 3, tail: 'c'.repeat(2_500) })
-    expect(displayOf('short')).toEqual({ head: 'short', hiddenLines: 0, tail: '' })
+  test('a prompt over 40 lines shows its first 12 and last 4 lines', () => {
+    const lines = Array.from({ length: 41 }, (_, i) => `line ${i + 1}`)
+    expect(displayOf(lines.join('\n'))).toEqual({ head: lines.slice(0, 12).join('\n'), hidden: '+25 lines', tail: lines.slice(-4).join('\n') })
+    expect(displayOf(lines.slice(0, 40).join('\n'))).toEqual({ head: lines.slice(0, 40).join('\n'), hidden: '', tail: '' })
+  })
+
+  test('a long prompt with few lines is cut by chars', () => {
+    const long = `${'a'.repeat(2_500)}${'\n'.repeat(3)}${'b'.repeat(48_000)}${'c'.repeat(2_500)}`
+    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hidden: '+48k chars', tail: 'c'.repeat(2_500) })
+    expect(displayOf('short')).toEqual({ head: 'short', hidden: '', tail: '' })
+  })
+
+  test('long lines past 40 fall back to the char cut', () => {
+    const long = Array.from({ length: 41 }, () => 'x'.repeat(1_000)).join('\n')
+    expect(displayOf(long).hidden).toBe('+36k chars')
   })
 
   test('a pasted prompt is framed without its wrapper', async ($, on) => {

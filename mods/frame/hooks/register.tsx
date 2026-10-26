@@ -13,6 +13,9 @@ const MAX_SESSIONS = 50
 const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
 const STAMPS_PREFIX = 'stamps:'
+const MAX_LINES = 40
+const HEAD_LINES = 12
+const TAIL_LINES = 4
 const LONG = 10_000
 const HEAD = 2_500
 const TAIL = 2_500
@@ -77,11 +80,14 @@ export const unwrapCommand = (text: string) => (COMMAND_NAME.test(text) ? text.r
 
 export const displayOf = (text: string) => {
   const shown = unwrapPastes(unwrapCommand(text))
-  if (shown.length <= LONG) return { head: shown, hiddenLines: 0, tail: '' }
-  const head = shown.slice(0, HEAD)
-  const tail = shown.slice(-TAIL)
-  const hiddenLines = shown.slice(HEAD, -TAIL).split('\n').length - 1
-  return { head, hiddenLines, tail }
+  const lines = shown.split('\n')
+  if (lines.length > MAX_LINES) {
+    const head = lines.slice(0, HEAD_LINES).join('\n')
+    const tail = lines.slice(-TAIL_LINES).join('\n')
+    if (head.length + tail.length <= LONG) return { head, hidden: `+${lines.length - HEAD_LINES - TAIL_LINES} lines`, tail }
+  }
+  if (shown.length <= LONG) return { head: shown, hidden: '', tail: '' }
+  return { head: shown.slice(0, HEAD), hidden: `+${Math.round((shown.length - HEAD - TAIL) / 1_000)}k chars`, tail: shown.slice(-TAIL) }
 }
 
 export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
@@ -250,8 +256,8 @@ export const register: Register = on => {
           <Text color={BORDER}>❯ </Text>
           <Box flexGrow={1} flexShrink={1} flexDirection="column">
             <Text>{shown.head}</Text>
-            {shown.tail !== '' && <Text dimColor>… +{shown.hiddenLines} lines</Text>}
-            {shown.tail !== '' && <Text>{shown.tail}</Text>}
+            {shown.hidden !== '' && <Text dimColor>… {shown.hidden}</Text>}
+            {shown.hidden !== '' && <Text>{shown.tail}</Text>}
           </Box>
         </Box>
         {title !== undefined && (
