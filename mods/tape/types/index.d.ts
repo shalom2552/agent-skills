@@ -34,6 +34,7 @@ declare module 'claude-code' {
       folds: Record<string, boolean>
       focused: string | null
       open: string | null
+      expanded: boolean
     }
   }
 }

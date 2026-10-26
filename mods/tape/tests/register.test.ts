@@ -2,7 +2,7 @@ import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { capCalls, clip, failedNote, flatten, formatSeconds, labelOf, storedListOf, targetOf } from '../hooks/register'
+import { capCalls, clip, failedNote, flatten, formatSeconds, headOf, labelOf, storedListOf, summaryOf, tailOf, targetOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -42,6 +42,7 @@ function world(on: On, entries?: Record<string, unknown>) {
   const panes: UiPane[] = []
   const session = { id: 's1' }
   const waiting = { reason: '' }
+  const transcript: { main: unknown[]; agents: Record<string, unknown[]> } = { main: [], agents: {} }
   const clock = mock.clock(on, { now: 0 })
   const store = new Map<string, unknown>(Object.entries(entries ?? {}))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
@@ -52,6 +53,9 @@ function world(on: On, entries?: Record<string, unknown>) {
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.id', () => ({ value: session.id }))
+  on('session.messages', ($, e) => ({
+    value: (e.agentId === undefined ? transcript.main : (transcript.agents[e.agentId] ?? { deny: 'unknown' })) as never,
+  }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
@@ -66,8 +70,16 @@ function world(on: On, entries?: Record<string, unknown>) {
     panes.splice(panes.findIndex(p => p.id === e.id), 1)
     return { value: undefined }
   })
-  return { panes, clock, session, store, waiting }
+  return { panes, clock, session, store, waiting, transcript }
 }
+
+const used = (tool_use_id: string, text: string, isError?: true, result?: unknown) => ({
+  role: 'assistant',
+  text: '',
+  toolUses: [{ tool_use_id, tool: 'x', input: {}, text, isError, result }],
+})
+
+const said = (text: string) => ({ role: 'assistant', text, toolUses: [] })
 
 const saved = (id: string, turn: number, file: string, status = 'ok') => ({
   [`calls:${id}`]: { version: 1, calls: [{ id: `c-${id}`, turn, tool: 'Read', target: file, startedAt: 0, endedAt: 1, status }] },
@@ -314,6 +326,101 @@ describe('register', () => {
     expect(textOf(await $.ui.render(PANE))).toContain('✗ a1 Explore · review A')
     await $.agent.spawn({ prompt: 'p', description: 'review B', subagentType: 'Explore', tool_use_id: 'u2' } as never)
     expect(storedListOf(w.store.get('agents:s1'), 'agents')).toHaveLength(2)
+  })
+
+  test('output summaries per tool', () => {
+    const call = (tool: string, status = 'ok' as const) => ({ id: 'c', turn: 1, tool, target: 'a.ts', startedAt: 0, status })
+    const out = (text: string, isError = false, result?: unknown) => ({ text, isError, result })
+    expect(summaryOf(call('Bash'), out('a\nb\n'))).toBe('2 lines')
+    expect(summaryOf(call('Bash'), out(''))).toBe('0 lines')
+    expect(summaryOf(call('Bash'), out('Exit code 1\nboom', true))).toBe('exit 1')
+    expect(summaryOf(call('Read'), out('x', true))).toBe('error')
+    expect(summaryOf(call('Read'), out('1→a', false, { file: { numLines: 142 } }))).toBe('142 lines · a.ts')
+    expect(summaryOf(call('Read'), out('1→a'))).toBe('1 line · a.ts')
+    const patch = [{ lines: [' a', '-b', '+c', '+d'] }]
+    expect(summaryOf(call('Edit'), out('ok', false, { structuredPatch: patch }))).toBe('+2 −1')
+    expect(summaryOf(call('Write'), out('ok', false, { type: 'create', structuredPatch: [], content: 'a\nb\nc' }))).toBe('+3 −0')
+    expect(summaryOf(call('Write'), out('ok'))).toBe('1 line')
+    expect(summaryOf({ ...call('Edit'), status: 'denied' }, out('not now\nmore', true))).toBe('denied: not now')
+  })
+
+  test('output keeps the tail or the head', () => {
+    const text = Array.from({ length: 25 }, (_, i) => `L${i + 1}`).join('\n')
+    expect(tailOf(text)).toEqual({ more: 5, lines: Array.from({ length: 20 }, (_, i) => `L${i + 6}`) })
+    expect(headOf(text, 2)).toEqual({ more: 23, lines: ['L1', 'L2'] })
+    expect(tailOf('a')).toEqual({ more: 0, lines: ['a'] })
+  })
+
+  test('a call shows its output folded, a press shows the tail', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'seq 45', tool_use_id: 'c1' } as never)
+    w.transcript.main = [used('c1', Array.from({ length: 45 }, (_, i) => `L${i + 1}.`).join('\n'))]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'c1' })
+    let text = textOf(await ui.drawn())
+    expect(text).toContain('── command ─')
+    expect(text).toContain('▸ output · 45 lines')
+    expect(text).not.toContain('L45.')
+    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.hotkey).toBe('o')
+
+    await ui.press({ key: 'output' })
+    text = textOf(await ui.drawn())
+    expect(text).toContain('▾ output · 45 lines')
+    expect(text).toContain('… 25 more lines')
+    expect(text).toContain('L26.')
+    expect(text).toContain('L45.')
+    expect(text).not.toContain('L25.')
+
+    await ui.press({ key: 'back' })
+    await ui.press({ key: 'c1' })
+    expect(textOf(await ui.drawn())).toContain('▸ output')
+    await ui.unmount()
+  })
+
+  test('a failed agent call reads its output from the agent', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'x', isError: true }) as never)
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.turn.start({ text: 'p', turnId: 't-ag', agentId: 'ag' })
+    await $.tool.call({ tool: 'Bash', command: 'false', agentId: 'ag', tool_use_id: 'c1' } as never)
+    w.transcript.agents.ag = [used('c1', 'Exit code 2\nboom', true)]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'c1' })
+    await ui.press({ key: 'output' })
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('output · exit 2')
+    expect(text).toContain('boom')
+    const head = await ui.find({ type: 'Button', key: 'output' })
+    expect(JSON.stringify(head)).toContain('"color":"error"')
+    await ui.unmount()
+  })
+
+  test('a spawn shows the agent summary and its report', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.agent.spawn({ prompt: 'p', description: 'review A', subagentType: 'Explore', tool_use_id: 'u1' } as never)
+    await $.tool.call({ tool: 'Agent', tool_use_id: 'u1', description: 'review A', prompt: 'p' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'ag-u1' } as never)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't-u1', agentId: 'ag-u1', reason: 'answer' })
+    w.transcript.main = [used('u1', 'Async agent launched successfully.')]
+    w.transcript.agents['ag-u1'] = [said('first'), said('found two bugs\nsecond line')]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'u1' })
+    expect(textOf(await ui.drawn())).toContain('▸ output · done · 0.0s · 1 call')
+    await ui.press({ key: 'output' })
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('found two bugs')
+    expect(text).not.toContain('launched')
+    await ui.unmount()
   })
 
   test('/clear empties the tape', async ($, on) => {

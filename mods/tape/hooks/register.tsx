@@ -24,6 +24,7 @@ const GLYPH = 2
 const MIN_TARGET_WIDTH = 10
 const MIN_COLUMNS = 24
 const MIN_PROMPT_COLUMNS = 40
+const OUTPUT_LINES = 20
 const FOCUS_COLOR = 'suggestion'
 const TARGET_KEYS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'skill', 'description', 'prompt']
 
@@ -33,6 +34,7 @@ const agents = atom({ plugin: 'tape', key: 'agents' } as const, [])
 const folds = atom({ plugin: 'tape', key: 'folds' } as const, {})
 const focused = atom({ plugin: 'tape', key: 'focused' } as const, null)
 const open = atom({ plugin: 'tape', key: 'open' } as const, null)
+const expanded = atom({ plugin: 'tape', key: 'expanded' } as const, false)
 
 const ICON: Record<TapeStatus, { glyph: string; color: string }> = {
   running: { glyph: '●', color: 'warning' },
@@ -120,6 +122,53 @@ export const capCalls = (list: TapeCall[]) => {
   return list.filter(call => kept.has(call))
 }
 
+type Output = { text: string; isError: boolean; result?: unknown }
+
+const field = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+
+const linesOf = (text: string) => (text.trim().length === 0 ? [] : text.replace(/\n+$/, '').split('\n'))
+
+const countOf = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+
+const diffOf = (result: unknown) => {
+  const patch = field(result, 'structuredPatch')
+  if (!Array.isArray(patch)) return undefined
+  const lines: unknown[] = patch.flatMap(hunk => field(hunk, 'lines') ?? [])
+  const content = field(result, 'content')
+  if (lines.length === 0 && field(result, 'type') === 'create' && typeof content === 'string') {
+    return `+${linesOf(content).length} −0`
+  }
+  const added = lines.filter(line => typeof line === 'string' && line.startsWith('+')).length
+  const removed = lines.filter(line => typeof line === 'string' && line.startsWith('-')).length
+  return `+${added} −${removed}`
+}
+
+export const summaryOf = (call: TapeCall, out: Output) => {
+  const lines = linesOf(out.text)
+  if (call.status === 'denied') return `denied: ${lines[0] ?? ''}`
+  if (out.isError) {
+    const exit = call.tool === 'Bash' ? /Exit code (\d+)/.exec(out.text)?.[1] : undefined
+    return exit !== undefined ? `exit ${exit}` : 'error'
+  }
+  if (call.tool === 'Read') {
+    const read = field(field(out.result, 'file'), 'numLines')
+    return `${countOf(typeof read === 'number' ? read : lines.length, 'line')} · ${call.target}`
+  }
+  if (call.tool === 'Edit' || call.tool === 'Write') return diffOf(out.result) ?? countOf(lines.length, 'line')
+  return countOf(lines.length, 'line')
+}
+
+export const tailOf = (text: string, room = OUTPUT_LINES) => {
+  const lines = linesOf(text)
+  return { more: Math.max(0, lines.length - room), lines: lines.slice(-room) }
+}
+
+export const headOf = (text: string, room = OUTPUT_LINES) => {
+  const lines = linesOf(text)
+  return { more: Math.max(0, lines.length - room), lines: lines.slice(0, room) }
+}
+
 const shortTool = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool)
 
 type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session' | 'clock'>
@@ -162,6 +211,7 @@ async function adopt($: Engine, id: string) {
   await update($, agents, () => savedAgents)
   await update($, folds, () => ({}))
   await update($, open, () => null)
+  await update($, expanded, () => false)
 }
 
 async function sync($: Engine) {
@@ -333,6 +383,7 @@ export const register: Register = on => {
     const crew = await read($, agents)
     const folded = await read($, folds)
     const shownId = await read($, open)
+    const isExpanded = await read($, expanded)
     const ring = e.props.isFocused ? await read($, focused) : null
     const columns = Math.max(MIN_COLUMNS, e.props.bodyColumns)
 
@@ -362,9 +413,48 @@ export const register: Register = on => {
       return agent === undefined ? call.target : `${handle.get(agent.id)} ${call.target}`
     }
 
+    const outputOf = async (call: TapeCall): Promise<Output | undefined> => {
+      const found =
+        call.agentId === undefined
+          ? await settled($.session.messages())
+          : await settled($.session.messages({ agentId: call.agentId }))
+      if (!Array.isArray(found)) return undefined
+      for (const message of found) {
+        const use = message.toolUses.find(one => one.tool_use_id === call.id)
+        if (use?.text !== undefined) return { text: use.text, isError: use.isError === true, result: use.result }
+      }
+      return undefined
+    }
+
+    const reportOf = async (agentId: string) => {
+      const found = await settled($.session.messages({ agentId }))
+      return Array.isArray(found) ? found.filter(m => m.role === 'assistant' && m.text.length > 0).at(-1)?.text : undefined
+    }
+
     const shown = list.find(call => call.id === shownId)
     if (shown !== undefined) {
       const icon = ICON[statusOf(shown)]
+      const spawned = spawnedBy(shown)
+      const out = shown.status === 'running' ? undefined : await outputOf(shown)
+      const isFailed = out?.isError === true || shown.status === 'error' || shown.status === 'denied'
+      const summary =
+        out === undefined
+          ? ''
+          : spawned !== undefined
+            ? [
+                spawned.status === 'running' ? 'running' : spawned.status === 'ok' ? 'done' : 'failed',
+                lengthOf(spawned),
+                countOf(list.filter(call => call.agentId === spawned.id).length, 'call'),
+              ].join(' · ')
+            : summaryOf(shown, out)
+      const report = isExpanded && spawned !== undefined ? await reportOf(spawned.id) : undefined
+      const body = !isExpanded || out === undefined ? undefined : spawned !== undefined ? headOf(report ?? out.text) : tailOf(out.text)
+      const rule = (label: string) => {
+        const head = `── ${label} `
+        return head + '─'.repeat(Math.max(0, columns - width(head)))
+      }
+      const outColor = isFailed ? 'error' : undefined
+      const more = body !== undefined && body.more > 0 ? `… ${countOf(body.more, 'more line')}` : ''
       const owner = agentOf(shown.agentId)
       const prompt = owner === undefined ? (known.find(t => t.n === shown.turn)?.prompt ?? '') : ''
       const where =
@@ -399,12 +489,31 @@ export const register: Register = on => {
               {prompt}
             </Text>
           )}
+          {shown.target.length > 0 && <Text dimColor>{rule(shown.tool === 'Bash' ? 'command' : 'input')}</Text>}
           {shown.target.length > 0 &&
             (shown.tool === 'Bash' ? (
               <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
             ) : (
               <Text>{shown.target}</Text>
             ))}
+          {out !== undefined && (
+            <Button
+              key="output"
+              hotkey="o"
+              plain
+              onPress={async () => {
+                await update($, expanded, was => !was)
+                await $.ui.focus({ requestId: PANE, key: 'output' }).catch(noop)
+              }}
+            >
+              <Text {...ink(ring === 'output', outColor, !isFailed)}>
+                {isExpanded ? '▾ ' : '▸ '}output{summary.length > 0 ? ` · ${summary}` : ''}
+              </Text>
+            </Button>
+          )}
+          {body !== undefined && spawned === undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+          {body !== undefined && <Text color={outColor}>{body.lines.join('\n')}</Text>}
+          {body !== undefined && spawned !== undefined && more.length > 0 && <Text dimColor>{more}</Text>}
         </Box>
       )
     }
@@ -452,6 +561,7 @@ export const register: Register = on => {
             key={call.id}
             plain
             onPress={async () => {
+              await update($, expanded, () => false)
               await update($, open, () => call.id)
               await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
             }}
