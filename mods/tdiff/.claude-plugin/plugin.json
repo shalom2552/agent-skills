@@ -1,6 +1,6 @@
 {
   "name": "tdiff",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "/tdiff: a live pane of every file Claude changed this session, with net diffs that survive resume.",
   "author": {
     "name": "shalom2552"
