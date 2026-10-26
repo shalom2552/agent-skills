@@ -20,7 +20,7 @@ readonly CLONE_URL="https://github.com/shalom2552/agent-skills.git"
 
 readonly FIELD_WIDTH=10   # label column, shared by the header and the summary
 readonly MARKER=".agent-skills-install"
-readonly DEFAULT_SCOPE="project"
+readonly DEFAULT_SCOPE="global"
 readonly DEFAULT_MODE="copy"
 
 readonly MARKETPLACE="shalom2552"   # Claude Code reserves "agent-skills"
