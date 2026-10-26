@@ -70,6 +70,8 @@ PICK=""
 ENTRY_STATE=""
 PLUGINS=""             # `claude plugin list --json`, one object per line, read once
 MARKETPLACE_ADDED=0
+MODS_MOVED=""          # where the marketplace pointed before this run moved it
+MOD_VERSION=""         # the installed version type_state_mods found
 PLUGIN_ERR=""
 FOREIGN=0              # a blocked entry that --force would replace
 LAST_STATUS=""         # what the last emit reported
@@ -292,6 +294,7 @@ summary() {
   else                      log "nothing to do"
   fi
   (( FOREIGN )) && note "blocked entries exist and were not created by install; --force replaces them"
+  [[ -n "$MODS_MOVED" ]] && note "mods now read from $(tilde "$REPO_ROOT"), not $(tilde "$MODS_MOVED")"
   return 0
 }
 
@@ -684,40 +687,71 @@ plugin_cmd() {
   return 1
 }
 
-# installed from a marketplace that points elsewhere reads as outdated
+mod_version() {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    -- "$1/.claude-plugin/plugin.json" 2>/dev/null | head -n 1
+}
+
+# sets ENTRY_STATE and MOD_VERSION; outdated means another version or another source
 type_state_mods() {
   local src="$1" entry="$2" scope obj
-  ENTRY_STATE="new"
+  ENTRY_STATE="new"; MOD_VERSION=""
   command -v claude >/dev/null && scope="$(plugin_scope)" || return 0
   while IFS= read -r obj; do
     [[ "$obj" == *"\"id\": \"$entry@$MARKETPLACE\""* && "$obj" == *"\"scope\": \"$scope\""* ]] || continue
     [[ "$scope" == user || "$obj" == *"\"projectPath\": \"$(project_path)\""* ]] || continue
-    if [[ "$obj" == *"\"readFromFolder\": \"$src\""* ]]; then ENTRY_STATE="current"; else ENTRY_STATE="outdated"; fi
+    [[ "$obj" =~ \"version\":\ \"([^\"]*)\" ]] && MOD_VERSION="${BASH_REMATCH[1]}"
+    if [[ "$obj" == *"\"readFromFolder\": \"$src\""* && "$MOD_VERSION" == "$(mod_version "$src")" ]]; then
+      ENTRY_STATE="current"
+    else
+      ENTRY_STATE="outdated"
+    fi
   done < <(plugins_json)
   return 0
 }
 
-# the repo is a directory marketplace, so claude reads each mod in place
+# points the marketplace at this checkout once per run; sets MODS_MOVED to the old path
+mods_source() {
+  (( MARKETPLACE_ADDED )) && return 0
+  local path
+  path="$(claude plugin marketplace list --json 2>/dev/null | tr -d '\n' \
+    | sed -n "s/.*\"name\": \"$MARKETPLACE\",[^}]*\"path\": \"\([^\"]*\)\".*/\1/p")"
+  if [[ "$path" != "$REPO_ROOT" ]]; then
+    plugin_cmd marketplace add "$REPO_ROOT" || return 1
+    MODS_MOVED="$path"
+  fi
+  MARKETPLACE_ADDED=1
+}
+
+# updates an installed mod; returns 1 when the mod is not installed at this scope
+refresh_mod() {
+  local src="$1" entry="$2" scope="$3" want
+  type_state_mods "$src" "$entry"
+  case "$ENTRY_STATE" in
+    new)     return 1 ;;
+    current) emit current "$entry" "up to date"; return 0 ;;
+  esac
+  mods_source || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+  want="$(mod_version "$src")"
+  if [[ "$MOD_VERSION" == "$want" ]]; then
+    emit updated "$entry" "now read from $(tilde "$src")"
+    return 0
+  fi
+  plugin_cmd update "$entry@$MARKETPLACE" --scope "$scope" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+  emit updated "$entry" "$MOD_VERSION -> $want"
+}
+
+# the repo is a directory marketplace; claude caches each mod by version
 type_install_mods() {
-  local src="$1" entry="$2" scope status
+  local src="$1" entry="$2" scope
   command -v claude >/dev/null || { emit blocked "$entry" "claude not found"; return 0; }
   scope="$(plugin_scope)" || { emit blocked "$entry" "mods take --scope, not --dest"; return 0; }
 
-  type_state_mods "$src" "$entry"
-  if [[ "$ENTRY_STATE" == current ]]; then
-    emit current "$entry" "up to date"
-    return 0
-  fi
+  refresh_mod "$src" "$entry" "$scope" && return 0
 
-  if (( ! MARKETPLACE_ADDED )); then
-    plugin_cmd marketplace add "$REPO_ROOT" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
-    MARKETPLACE_ADDED=1
-  fi
+  mods_source || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
   plugin_cmd install "$entry@$MARKETPLACE" --scope "$scope" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
-
-  status="installed"
-  [[ "$ENTRY_STATE" == new ]] || status="updated"
-  emit "$status" "$entry"
+  emit installed "$entry"
 }
 
 # shellcheck disable=SC2016 # jq variables, not shell ones
