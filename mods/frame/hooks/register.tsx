@@ -175,7 +175,7 @@ export const register: Register = on => {
   on('session.append', { door: 'command' }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const content = e.message.content.map(b => {
-      if (b.type !== 'text') return b
+      if (b.type !== 'text' || typeof b.text !== 'string') return b
       const echo = echoOf(b.text)
       return echo === undefined ? b : { ...b, text: echo }
     })
@@ -187,8 +187,9 @@ export const register: Register = on => {
 
   on('session.append', { door: 'tool-result' }, async ($, e, next) => {
     const kept = await next(e)
+    if (kept.deny !== undefined) return kept
     const texts = textsOf(kept.message.content).filter(t => t !== '')
-    if (kept.deny === undefined && e.agentId === undefined && texts.length > 0) await stampRow($, stored, kept.uuid, texts, false, true)
+    if (e.agentId === undefined && texts.length > 0) await stampRow($, stored, kept.uuid, texts, false, true)
     return kept
   })
 

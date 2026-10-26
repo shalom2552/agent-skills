@@ -172,7 +172,7 @@ describe('register', () => {
         ],
       },
       door: 'tool-result',
-      origin: { kind: 'tool', name: 'Bash' },
+      origin: { kind: 'tool', tool: 'Bash' },
       uuid: 'r1',
     })
 
