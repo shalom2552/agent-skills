@@ -119,11 +119,19 @@ const persist = async ($: EngineInterface, id: string, all: Stamps) => {
   }
 }
 
-const stampRow = async ($: EngineInterface, cache: Map<string, Stamps>, uuid: string, texts: string[], isCounted: boolean) => {
+const stampRow = async (
+  $: EngineInterface,
+  cache: Map<string, Stamps>,
+  uuid: string,
+  texts: string[],
+  isCounted: boolean,
+  isNote = false,
+) => {
   const at = await $.clock.now()
   const id = await settled($.session.id())
   const prior = id === undefined ? {} : await load($, cache, id)
-  const stamp: FrameStamp = isCounted ? { n: await update($, count, c => Math.max(c, lastOf(prior)) + 1), at, texts } : { at, texts }
+  const base: FrameStamp = isNote ? { at, texts, note: true } : { at, texts }
+  const stamp: FrameStamp = isCounted ? { n: await update($, count, c => Math.max(c, lastOf(prior)) + 1), ...base } : base
   await update($, stamps, all => newest([...Object.entries(all), [uuid, stamp]]))
   if (id !== undefined) {
     const all = newest([...Object.entries(prior), [uuid, stamp]])
@@ -153,8 +161,9 @@ export const register: Register = on => {
 
   on('session.append', { door: 'prompt' }, async ($, e, next) => {
     const kept = await next(e)
-    if (kept.deny === undefined && e.agentId === undefined && e.origin.kind === 'composer') {
-      await stampRow($, stored, kept.uuid, textsOf(kept.message.content), true)
+    const isComposer = e.origin.kind === 'composer'
+    if (kept.deny === undefined && e.agentId === undefined && (isComposer || e.origin.kind === 'plugin')) {
+      await stampRow($, stored, kept.uuid, textsOf(kept.message.content), isComposer)
     }
     return kept
   })
@@ -172,12 +181,19 @@ export const register: Register = on => {
     return kept
   })
 
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    const kept = await next(e)
+    const texts = textsOf(kept.message.content).filter(t => t !== '')
+    if (kept.deny === undefined && e.agentId === undefined && texts.length > 0) await stampRow($, stored, kept.uuid, texts, false, true)
+    return kept
+  })
+
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     const isEcho = COMMAND_NAME.test(e.props.text)
     if (e.props.isExpanded) return isEcho ? next({ ...e, props: { ...e.props, text: unwrapCommand(e.props.text) } }) : next(e)
-    if (e.props.origin.kind !== 'composer' && !isEcho) return next(e)
+    const { origin } = e.props
+    const isOwn = origin.kind === 'composer' || origin.kind === 'plugin' || isEcho
 
-    const { Box, Text } = $.ui.resolve(e)
     const text = e.props.text.trim()
     const match = (all: Stamps) =>
       all[e.requestId] ??
@@ -189,15 +205,16 @@ export const register: Register = on => {
       const id = await settled($.session.id())
       if (id !== undefined) stamp = match(await load($, stored, id))
     }
+    if (!isOwn && stamp?.note !== true) return next(e)
+
+    const { Box, Text } = $.ui.resolve(e)
     const offset = await read($, offsetMs)
     const shown = displayOf(e.props.text)
-    const parts =
-      stamp === undefined
-        ? []
-        : [
-            ...(stamp.n === undefined ? [] : [`${COUNT_ICON} ${stamp.n}`]),
-            ...(offset === null ? [] : [`${CLOCK_ICON} ${clockOf(stamp.at, offset)}`]),
-          ]
+    const parts = [
+      ...(origin.kind === 'plugin' ? [origin.name] : []),
+      ...(stamp?.n === undefined ? [] : [`${COUNT_ICON} ${stamp.n}`]),
+      ...(stamp === undefined || offset === null ? [] : [`${CLOCK_ICON} ${clockOf(stamp.at, offset)}`]),
+    ]
     const title = parts.length === 0 ? undefined : parts.join(' · ')
 
     return (

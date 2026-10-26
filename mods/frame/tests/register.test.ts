@@ -134,6 +134,44 @@ describe('register', () => {
     expect(text).not.toContain('\uea6b')
   })
 
+  test('a plugin prompt is framed with its name and time, no number', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.session.append({ ...prompt('u1', 'Apply that.'), origin: { kind: 'plugin', name: 'read-only' } })
+    await $.session.append(prompt('u2', 'next'))
+
+    const row = ROW('u1', 'Apply that.')
+    const text = textOf(await $.ui.render({ ...row, props: { ...row.props, origin: { kind: 'plugin', name: 'read-only' } } }))
+    expect(text).toContain('Apply that.')
+    expect(text).toContain('read-only · \u{f0150} 03:00')
+    expect(text).not.toContain('')
+    expect(textOf(await $.ui.render(ROW('u2', 'next')))).toContain(' 1 ·')
+  })
+
+  test('a note added on approve is framed with its time, no number', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.session.append({
+      message: {
+        type: 'user',
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+          { type: 'text', text: 'an' },
+        ],
+      },
+      door: 'tool-result',
+      origin: { kind: 'tool', name: 'Bash' },
+      uuid: 'r1',
+    })
+
+    const row = ROW('r1', 'an')
+    const text = textOf(await $.ui.render({ ...row, props: { ...row.props, origin: { kind: 'unclassified' } } }))
+    expect(text).toContain('an')
+    expect(text).toContain('\u{f0150} 03:00')
+    expect(text).not.toContain('\uea6b')
+  })
+
   test('ctrl+o and other senders keep the engine row', async ($, on) => {
     world(on)
     await $.session.start(SESSION)

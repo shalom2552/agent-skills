@@ -1,4 +1,4 @@
-export type FrameStamp = { n?: number; at: number; texts: string[] }
+export type FrameStamp = { n?: number; at: number; texts: string[]; note?: true }
 
 declare module 'claude-code' {
   interface PluginState {
