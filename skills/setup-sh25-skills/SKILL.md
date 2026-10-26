@@ -28,16 +28,20 @@ Read `./install --help` for its flags. It is the source of truth and it changes;
 Print one row per entry, then the checkout path:
 
 ```
-entry               scope   mode  wired
-skills/system-fix   global  copy  -
-scripts/statusline  global  copy  yes
+entry                        scope   mode  wired
+skills/system-fix            global  copy  -
+themes/catppuccin.json       global  copy  yes
+settings/tmux-truecolor.json global  -     yes
+mods/tape                    global  -     -
 
 checkout: ~/.local/share/agent-skills
 ```
 
-`./install --list` names the entries that exist in the repo. Everything else comes from the assets root: presence at `<root>/<type>/<entry>`, mode from whether it is a symlink, ownership from the marker, and `wired` from the table below. Report an entry whose marker names a different repo as such: on disk, but not ours.
+`./install --list` names the entries that exist in the repo. Everything else comes from the assets root: presence at `<root>/<type>/<entry>`, mode from whether it is a symlink, ownership from the marker, and `wired` from the table and settings fragments below. Report an entry whose marker names a different repo as such: on disk, but not ours.
 
-Do not compare an installed copy against the checkout. `install` refreshes copies on every run, so the answer to any difference is to re-run it.
+Mods are not on disk under the root. Read them from `claude plugin list --json`: ours have an `id` ending in `@shalom2552`, and `scope` is `user` for global or `project` (with its `projectPath`).
+
+Do not compare an installed copy against the checkout. `./install -u` pulls the checkout and refreshes what is installed, so the answer to any difference is to run it.
 
 ### install
 
@@ -47,7 +51,7 @@ Ask the user for scope and mode, then run with explicit flags and `--yes`:
 ./install --scope global --mode link --yes
 ```
 
-An agent cannot use the interactive menu. `install` checks for a terminal, finds none, and silently takes its defaults (project scope, copy). To get the menu, the user runs `./install` themselves in their terminal.
+An agent cannot use the interactive menu. `install` checks for a terminal, finds none, and silently takes its defaults (global scope, copy). To get the menu, the user runs `./install` themselves in their terminal.
 
 ### setup
 
@@ -63,6 +67,8 @@ Delete the entry and strip its wiring, so nothing is left pointing at a file tha
 
 Only remove entries whose marker carries `repo=` matching the repo you installed from. Anything else belongs to another installer or to the user. Strip a wiring key only when its value points at the path being removed.
 
+Remove a mod with `claude plugin uninstall <mod>@shalom2552 --scope <user|project>`, run from the project directory for project scope.
+
 ## Wiring table
 
 One row per asset that needs configuration beyond being on disk. Assets not listed here need nothing.
@@ -73,6 +79,8 @@ One row per asset that needs configuration beyond being on disk. Assets not list
 ## Settings fragments
 
 `install` merges `settings/<name>.json`, and the `<stem>.settings.json` beside an entry, into the scope's `settings.json`. It records each under `<root>/settings/`, as `<name>.json`, or `<type>/<stem>.json` for one bound to an entry, with a sidecar marker.
+
+Themes carry one: `themes/catppuccin.settings.json` sets `theme`. Themes install only at global scope, since Claude Code loads custom themes from `~/.claude/themes`.
 
 - `status`: an entry with a bound fragment is `wired` when its record exists and its marker is ours.
 - `remove`: after deleting the entry, unapply its bound record. For each top-level key in the record, when every value under it still matches `settings.json`, delete those values and any object left empty; a key with any value changed by hand stays whole. Then delete the record and its marker.
@@ -97,7 +105,7 @@ installed=2026-08-27T17:16:01Z
 
 ## Assets roots
 
-- global: `$CLAUDE_HOME`, else `~/.claude`
+- global: `$CLAUDE_CONFIG_DIR`, else `~/.claude`
 - project: `<project>/.claude`
 
-Entries sit under a subdirectory per type: `skills/`, `scripts/`, and whatever types the repo grows. `./install --list` groups its output by type, which is where to learn the current set.
+Entries sit under a subdirectory per type: `skills/`, `themes/`, and whatever types the repo grows. Settings records sit under `settings/`, and mods live in Claude Code's plugin cache. `./install --list` groups its output by type, which is where to learn the current set.
