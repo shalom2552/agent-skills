@@ -354,6 +354,22 @@ function forget($: Engine, ticket: Ticket, sessionId: string | undefined) {
   })
 }
 
+async function record($: Engine, rec: FileRecord, seen: Seen) {
+  rec.latest = seen.snap
+  rec.latestStat = seen.stat
+  rec.isEditedSince = false
+  if (seen.text !== null) await $.fs.write(snapFile('latest', rec), seen.text)
+  if (isChanged(rec)) {
+    const counted = noTextOf(rec) === null ? diffText(await snapText($, 'base', rec), seen.text ?? '') : null
+    rec.adds = counted?.adds ?? 0
+    rec.dels = counted?.dels ?? 0
+    rec.changedAt = await $.clock.now()
+  } else {
+    rec.adds = 0
+    rec.dels = 0
+  }
+}
+
 function settle($: Engine, paths: readonly string[], ticket: Ticket, sessionId: string | undefined) {
   return enqueue(async () => {
     releaseAll(ticket)
@@ -368,25 +384,18 @@ function settle($: Engine, paths: readonly string[], ticket: Ticket, sessionId: 
         rec.latestStat = seen.stat
         continue
       }
-      rec.latest = seen.snap
-      rec.latestStat = seen.stat
-      rec.isEditedSince = false
-      if (seen.text !== null) await $.fs.write(snapFile('latest', rec), seen.text)
-      if (isChanged(rec)) {
-        const counted = noTextOf(rec) === null ? diffText(await snapText($, 'base', rec), seen.text ?? '') : null
-        rec.adds = counted?.adds ?? 0
-        rec.dels = counted?.dels ?? 0
-        rec.changedAt = await $.clock.now()
-      } else {
-        rec.adds = 0
-        rec.dels = 0
-      }
+      await record($, rec, seen)
       if (wasChanged || isChanged(rec)) changed.push(path)
     }
     if (changed.length === 0) return
     await save($)
     await publish($, changed)
   })
+}
+
+async function isAbsent($: Engine, path: string) {
+  const stat = await $.fs.stat(path).catch(() => undefined)
+  return stat === undefined || stat.kind !== 'file'
 }
 
 async function isEdited($: Engine, rec: FileRecord & { latest: Snap }) {
@@ -405,17 +414,23 @@ export function recheckEdited($: Engine) {
   return enqueue(async () => {
     await sync($)
     let isAny = false
+    const gone: string[] = []
     for (const rec of live.files.values()) {
       if (!isChanged(rec)) continue
+      if (rec.latest.state !== 'absent' && (await isAbsent($, rec.path))) {
+        await record($, rec, ABSENT)
+        gone.push(rec.path)
+        continue
+      }
       const isNow = await isEdited($, rec).catch(() => rec.isEditedSince)
       if (isNow !== rec.isEditedSince) {
         rec.isEditedSince = isNow
         isAny = true
       }
     }
-    if (!isAny) return
+    if (!isAny && gone.length === 0) return
     await save($)
-    await update($, rows, () => toRows())
+    await publish($, gone)
   })
 }
 

@@ -15,6 +15,7 @@ async function switchTo($: TestEngine, w: World, id: string, reason: 'clear' | '
 }
 
 const lines = (...list: string[]) => list.map(line => `${line}\n`).join('')
+const DONE = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as const
 
 describe('tool writes', () => {
   test('Write creating a file shows as added, every line counted', async ($, on) => {
@@ -165,6 +166,36 @@ describe('open diff and edited since', () => {
     w.put(file, 'claude\n')
     await $.turn.complete(done)
     expect(w.rows()[0]?.isEditedSince).toBe(false)
+  })
+
+  test('a file created and then deleted drops out', async ($, on) => {
+    const w = world(on)
+    const file = `${w.root}/scratch.txt`
+    await $.session.start({ cwd: w.root, ...START })
+    await $.tool.call({ tool: 'Write', file_path: file, content: 'tmp\n' })
+    await $.turn.complete(DONE)
+    expect(w.rows()).toHaveLength(1)
+
+    w.files.delete(file)
+    await $.turn.complete(DONE)
+    expect(w.rows()).toEqual([])
+  })
+
+  test('a file that existed at base and is then deleted shows as deleted', async ($, on) => {
+    const w = world(on)
+    const file = `${w.root}/old.txt`
+    w.put(file, lines('one', 'two'))
+    await $.session.start({ cwd: w.root, ...START })
+    await $.tool.call({ tool: 'Edit', file_path: file, old_string: 'one', new_string: 'uno' })
+    await $.turn.complete(DONE)
+    w.seedOpen(file)
+
+    w.files.delete(file)
+    await $.turn.complete(DONE)
+    expect(w.rows()).toEqual([
+      expect.objectContaining({ path: file, kind: 'deleted', adds: 0, dels: 2, isEditedSince: false }),
+    ])
+    expect(w.open()?.diff).toEqual(expect.objectContaining({ adds: 0, dels: 2 }))
   })
 })
 
