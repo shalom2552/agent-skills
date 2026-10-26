@@ -36,6 +36,7 @@ declare module 'claude-code' {
       shell: Shaped<TdiffShell>
       where: Shaped<TdiffWhere>
       folds: Shaped<Record<string, boolean>>
+      focused: Shaped<string | null>
     }
   }
 }

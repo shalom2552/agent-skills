@@ -79,20 +79,20 @@ for (const surface of SURFACES) {
       expect(text).toEqual([
         '5 files +5 -1',
         '~/proj',
-        '▾ src/ +3 -1',
+        '▾ src/',
         '    M app.ts +2 -1',
         '    A new.ts edited since +1 -0',
         '  A logo.bin no text diff',
         'Elsewhere',
-        '▾ /opt/other/ +1 -0',
+        '▾ /opt/other/',
         '    A x.txt +1 -0',
-        '▾ ~/.config/ +1 -0',
+        '▾ ~/.config/',
         '    A tool.conf +1 -0',
       ])
       const raw = screen(await ui.drawn())
       expect(raw[3]?.endsWith(' +2 -1')).toBe(true)
       expect(raw[5]?.endsWith(' no text diff')).toBe(true)
-      expect((await ui.find({ type: 'Text', text: /^\+3$/ }))?.props.dimColor).toBe(true)
+      expect(await ui.find({ type: 'Text', text: /^\+3$/ })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /^\+2$/ }))?.props.color).toBe('success')
 
       const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(one => one.text === text)?.props
@@ -121,8 +121,8 @@ for (const surface of SURFACES) {
       expect(await view(ui)).toEqual([
         '4 files +8 -4',
         w.root,
-        '▾ src/ +6 -3',
-        '  ▾ lib/utils/ +4 -2',
+        '▾ src/',
+        '  ▾ lib/utils/',
         '      M a.ts +2 -1',
         '      M b.ts +2 -1',
         '    M main.ts +2 -1',
@@ -140,14 +140,15 @@ for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, isFocused: true } })
       let text = await view(ui)
       expect(text).toContain('▸ gen/ 21 files +21 -0')
-      expect(text).toContain('▾ small/ +20 -0')
+      expect(text).toContain('▾ small/')
+      expect((await ui.find({ type: 'Text', text: /^\+21$/ }))?.props.color).toBe('success')
       expect(text).toContain('    A s0.ts +1 -0')
       expect(text.some(line => line.includes('f0.ts'))).toBe(false)
 
       await ui.press({ key: 'dir:root:gen/' })
       await ui.press({ key: 'dir:root:small/' })
       text = await view(ui)
-      expect(text).toContain('▾ gen/ +21 -0')
+      expect(text).toContain('▾ gen/')
       expect(text).toContain('    A f0.ts +1 -0')
       expect(text).toContain('▸ small/ 20 files +20 -0')
       await ui.unmount()
@@ -168,20 +169,20 @@ for (const surface of SURFACES) {
       await ui.unmount()
     })
 
-    test('zero counts are dim on file rows, folder rows and the header', async ($, on) => {
+    test('zero counts are dim on file rows and the header', async ($, on) => {
       const w = world(on, { isStateLive: true })
       await $.session.start({ cwd: w.root, ...START })
       await $.tool.call({ tool: 'Write', file_path: `${w.root}/src/a.ts`, content: lines('a', 'b') })
 
       const ui = await $.ui.mount(pane(surface))
       const zeros = await ui.findAll({ type: 'Text', text: /^-0$/ })
-      expect(zeros).toHaveLength(3)
+      expect(zeros).toHaveLength(2)
       for (const zero of zeros) {
         expect(zero.props.dimColor).toBe(true)
         expect(zero.props.color).toBeUndefined()
       }
       const twos = await ui.findAll({ type: 'Text', text: /^\+2$/ })
-      expect(twos.map(two => two.props.color)).toEqual(['success', undefined, 'success'])
+      expect(twos.map(two => two.props.color)).toEqual(['success', 'success'])
       await ui.unmount()
     })
 
@@ -197,7 +198,7 @@ for (const surface of SURFACES) {
       const rows = raw.filter(line => /[▾▸]|^ *[AMD] /.test(line))
       expect(rows).toHaveLength(4)
       for (const line of rows) expect(Array.from(line).length).toBeLessThanOrEqual(40)
-      expect(rows[0]).toMatch(/^▾ \/var\/tmp\/.*….*\/demo\/ +\+2 -0$/)
+      expect(rows[0]).toMatch(/^▾ \/var\/tmp\/.*….*\/demo\/ *$/)
       expect(rows.some(line => /^ {4}A a-very.*….*\.ts \+1 -0$/.test(line))).toBe(true)
       await ui.unmount()
     })

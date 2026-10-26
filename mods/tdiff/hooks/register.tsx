@@ -10,6 +10,6 @@ export const register: Register = on => {
     await startCore($)
     return started
   })
-  registerCore(on)
   registerPane(on)
+  registerCore(on)
 }

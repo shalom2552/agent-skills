@@ -20,6 +20,7 @@ const shell = atom(
 )
 const where = atom({ plugin: 'tdiff', key: 'where' } as const, { root: '/', home: '' }, { shape: 'where-1' })
 const folds = atom({ plugin: 'tdiff', key: 'folds' } as const, {}, { shape: 'folds-1' })
+const focused = atom({ plugin: 'tdiff', key: 'focused' } as const, null, { shape: 'focused-1' })
 
 const LETTER: Record<TdiffKind, { letter: string; color: string }> = {
   added: { letter: 'A', color: 'success' },
@@ -42,6 +43,7 @@ const SHELL_REASON: Record<TdiffShellReason, string> = {
 }
 
 const OUTSIDE_COLOR = 'suggestion'
+const FOCUS_COLOR = 'suggestion'
 const ROOT_COLOR = 'claude'
 const EDITED = 'edited since'
 const NO_DIFF = 'no text diff'
@@ -75,6 +77,14 @@ export function startPane($: CoreEngineInterface) {
 }
 
 export function registerPane(on: On) {
+  on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash'] }, async ($, e, next) => {
+    const before = (await read($, rows)).length
+    const ran = await next(e)
+    if (before > 0 || (await read($, rows)).length === 0) return ran
+    if (!(await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
+    return ran
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'tdiff' }, async $ => {
     const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
     if (isOpen) {
@@ -85,6 +95,12 @@ export function registerPane(on: On) {
     return { text: opened.isPlaced ? 'Tdiff opened.' : `Tdiff is waiting: ${opened.reason}` }
   })
 
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
+    return moved
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     const list = await read($, rows)
@@ -92,11 +108,13 @@ export function registerPane(on: On) {
     const place = await read($, where)
     const tracking = await read($, shell)
     const folded = await read($, folds)
+    const ring = e.props.isFocused ? await read($, focused) : null
 
-    const tone = (text: string, n: number, color: string, isDim = false) => (
-      <Text color={isDim || n === 0 ? undefined : color} dimColor={isDim || n === 0}>
-        {text}
-      </Text>
+    const ink = (isLit: boolean, color?: string, isDim?: boolean) =>
+      isLit ? { color: FOCUS_COLOR } : { color, dimColor: isDim }
+
+    const tone = (text: string, n: number, color: string, isDim = false, isLit = false) => (
+      <Text {...ink(isLit, isDim || n === 0 ? undefined : color, isDim || n === 0)}>{text}</Text>
     )
 
     const counts = (adds: number, dels: number) => (
@@ -110,18 +128,25 @@ export function registerPane(on: On) {
       const { isUnderRoot, label } = displayPath(shown.path, place)
       const adds = shown.diff?.adds ?? row?.adds ?? 0
       const dels = shown.diff?.dels ?? row?.dels ?? 0
+      const back = {
+        key: 'back',
+        hotkey: 'b',
+        label: 'back',
+        onPress: async () => {
+          await closeFile($)
+          await $.ui.focus({ requestId: PANE, key: shown.path }).catch(noop)
+        },
+      }
       return (
         <Box flexDirection="column">
           <Box flexDirection="row" justifyContent="space-between">
-            <Button
-              key="back"
-              hotkey="b"
-              label="back"
-              onPress={async () => {
-                await closeFile($)
-                await $.ui.focus({ requestId: PANE, key: shown.path }).catch(noop)
-              }}
-            />
+            {ring === 'back' ? (
+              <Button {...back}>
+                <Text color={FOCUS_COLOR}>back</Text>
+              </Button>
+            ) : (
+              <Button {...back} />
+            )}
             {counts(adds, dels)}
           </Box>
           <Text bold color={isUnderRoot ? undefined : OUTSIDE_COLOR} wrap="truncate-start">
@@ -190,22 +215,27 @@ export function registerPane(on: On) {
     const dels = list.reduce((sum, row) => sum + row.dels, 0)
     const totals = drawn
       .flatMap(section => section.lines)
-      .flatMap(({ node }): { adds: number; dels: number }[] =>
-        node.kind === 'dir' ? [node] : node.row.noText === null ? [node.row] : [],
+      .flatMap((line): { adds: number; dels: number }[] =>
+        line.node.kind === 'dir'
+          ? 'isCollapsed' in line && line.isCollapsed
+            ? [line.node]
+            : []
+          : line.node.row.noText === null
+            ? [line.node.row]
+            : [],
       )
     const addWidth = Math.max(width(`+${adds}`), ...totals.map(one => width(`+${one.adds}`)))
     const delWidth = Math.max(width(`-${dels}`), ...totals.map(one => width(`-${one.dels}`)))
     const countWidth = addWidth + 1 + delWidth
 
-    const counted = (adds: number, dels: number, isDim: boolean) => (
-      <Box flexShrink={0}>
-        <Text mono>
-          {' '}
-          {tone(padStart(`+${adds}`, addWidth), adds, 'success', isDim)}{' '}
-          {tone(padStart(`-${dels}`, delWidth), dels, 'error', isDim)}
-        </Text>
-      </Box>
+    const counted = (adds: number, dels: number, isDim: boolean, isLit: boolean) => (
+      <Text mono {...ink(isLit)}>
+        {' '}
+        {tone(padStart(`+${adds}`, addWidth), adds, 'success', isDim, isLit)}{' '}
+        {tone(padStart(`-${dels}`, delWidth), dels, 'error', isDim, isLit)}
+      </Text>
     )
+    const fill = (room: number) => ' '.repeat(Math.max(0, room))
     const columns = Math.max(MIN_COLUMNS, e.props.bodyColumns)
     const countsRoom = 1 + countWidth
 
@@ -218,71 +248,62 @@ export function registerPane(on: On) {
       const indent = line.depth * INDENT
       if (line.node.kind === 'dir') {
         const dir = line.node
+        const isLit = ring === `dir:${dir.key}`
         const isCollapsed = 'isCollapsed' in line && line.isCollapsed
         const note = isCollapsed ? ` ${plural(dir.count, 'file')}` : ''
-        const name = middle(dir.name, columns - indent - GLYPH - width(note) - countsRoom)
+        const tail = isCollapsed ? countsRoom : 0
+        const name = middle(dir.name, columns - indent - GLYPH - width(note) - tail)
         return (
           <Box key={`row:${dir.key}`} flexDirection="row" paddingLeft={indent}>
-            <Box flexShrink={0}>
-              <Text dimColor>{isCollapsed ? '▸ ' : '▾ '}</Text>
-            </Box>
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>
-              <Button key={`dir:${dir.key}`} plain onPress={() => void toggle(dir.key, dir.count)()}>
-                <Text color={line.depth === 0 ? topColor : undefined} wrap="truncate-middle">
-                  {name}
-                </Text>
-              </Button>
-            </Box>
-            {isCollapsed && (
-              <Box flexShrink={0}>
-                <Text dimColor>{note}</Text>
-              </Box>
-            )}
-            {counted(dir.adds, dir.dels, true)}
+            <Button key={`dir:${dir.key}`} plain onPress={() => void toggle(dir.key, dir.count)()}>
+              <Text {...ink(isLit, undefined, true)}>{isCollapsed ? '▸ ' : '▾ '}</Text>
+              <Text {...ink(isLit, line.depth === 0 ? topColor : undefined)} wrap="truncate-middle">
+                {name}
+              </Text>
+              <Text {...ink(isLit, undefined, true)}>
+                {note}
+                {fill(columns - indent - GLYPH - width(name) - width(note) - tail)}
+              </Text>
+              {isCollapsed ? counted(dir.adds, dir.dels, false, isLit) : <Text>{''}</Text>}
+            </Button>
           </Box>
         )
       }
       const { row } = line.node
       const kind = LETTER[row.kind]
+      const isLit = ring === row.path
       const right = (row.isEditedSince ? 1 + width(EDITED) : 0) + (row.noText === null ? countsRoom : 1 + Math.max(countWidth, width(NO_DIFF)))
       const name = middle(line.node.name, columns - indent - GLYPH - LETTER_SLOT - right)
       return (
         <Box key={`row:${row.path}`} flexDirection="row" paddingLeft={indent}>
-          <Box flexShrink={0}>
-            <Text>
+          <Button
+            key={row.path}
+            plain
+            onPress={async () => {
+              await openFile($, row.path)
+              await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
+            }}
+          >
+            <Text {...ink(isLit)}>
               {'  '}
-              <Text color={kind.color}>{kind.letter}</Text>{' '}
+              <Text {...ink(isLit, kind.color)}>{kind.letter}</Text>{' '}
             </Text>
-          </Box>
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Button
-              key={row.path}
-              plain
-              onPress={async () => {
-                await openFile($, row.path)
-                await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
-              }}
-            >
-              <Text bold wrap="truncate-middle">
-                {name}
-              </Text>
-            </Button>
-          </Box>
-          {row.isEditedSince && (
-            <Box flexShrink={0}>
-              <Text color="warning"> {EDITED}</Text>
-            </Box>
-          )}
-          {row.noText === null ? (
-            counted(row.adds, row.dels, false)
-          ) : (
-            <Box flexShrink={0}>
-              <Text mono dimColor>
+            <Text bold {...ink(isLit)} wrap="truncate-middle">
+              {name}
+            </Text>
+            <Text {...ink(isLit)}>
+              {fill(columns - indent - GLYPH - LETTER_SLOT - width(name) - right)}
+              <Text {...ink(isLit, 'warning')}>{row.isEditedSince ? ` ${EDITED}` : ''}</Text>
+            </Text>
+            {row.noText === null ? (
+              counted(row.adds, row.dels, false, isLit)
+            ) : (
+              <Text mono {...ink(isLit, undefined, true)}>
                 {' '}
                 {padStart(NO_DIFF, countWidth)}
               </Text>
-            </Box>
-          )}
+            )}
+          </Button>
         </Box>
       )
     }
