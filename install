@@ -4,6 +4,8 @@
 # mode_install_<name> with its mode_state_<name> up-to-date test.
 # A type installed by something other than files defines type_install_<type>
 # and type_state_<type>, and ignores mode.
+# A type that works only under some roots defines type_block_<type>, which
+# prints why it cannot go to the root it is given.
 # A trailing `return 0` keeps a falsy last test from tripping set -e.
 
 set -euo pipefail
@@ -897,6 +899,12 @@ bound_install() {
   EMIT_TYPE="$prev"
 }
 
+# claude reads custom themes only from the global config dir
+type_block_themes() {
+  [[ "$(abspath "$1")" == "$(abspath "$(scope_root_global)")" ]] && return 1
+  printf 'themes load only from %s' "$(tilde "$(scope_root_global)")"
+}
+
 prunes() {
   local f
   (( ${#FILTERS[@]} == 0 )) && return 0
@@ -1465,7 +1473,7 @@ count_types() {
 
 # one heading per asset type, so the run reads the way the picker looked
 install_entries() {
-  local root="$1" row type src dest_rel meta entry dest_dir last=""
+  local root="$1" row type src dest_rel meta entry dest_dir last="" why
   local -A made=()
   for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
@@ -1475,6 +1483,10 @@ install_entries() {
     fi
     if declare -F "type_install_${type}" >/dev/null; then
       "type_install_${type}" "$src" "$entry"
+      continue
+    fi
+    if declare -F "type_block_${type}" >/dev/null && why="$("type_block_${type}" "$root")"; then
+      emit blocked "$entry" "$why"
       continue
     fi
     dest_dir="$root/$dest_rel"
