@@ -6,6 +6,7 @@ import type { FrameStamp } from '../types'
 const stamps = atom({ plugin: 'frame', key: 'stamps' } as const, {})
 const count = atom({ plugin: 'frame', key: 'count' } as const, 0)
 const offsetMs = atom({ plugin: 'frame', key: 'offsetMs' } as const, null)
+const opened = atom({ plugin: 'frame', key: 'opened' } as const, [])
 
 const BORDER = 'suggestion'
 const MAX_STAMPS = 500
@@ -78,8 +79,10 @@ export const echoOf = (text: string) => {
 
 export const unwrapCommand = (text: string) => (COMMAND_NAME.test(text) ? text.replace(COMMAND_TAGS, '').trim() : text)
 
+const wholeOf = (text: string) => unwrapPastes(unwrapCommand(text))
+
 export const displayOf = (text: string) => {
-  const shown = unwrapPastes(unwrapCommand(text))
+  const shown = wholeOf(text)
   const lines = shown.split('\n')
   if (lines.length > MAX_LINES) {
     const head = lines.slice(0, HEAD_LINES).join('\n')
@@ -179,6 +182,7 @@ export const register: Register = on => {
     if (e.reason === 'clear' || e.reason === 'resume') {
       await update($, stamps, () => ({}))
       await update($, count, () => 0)
+      await update($, opened, () => [])
     }
     return next(e)
   })
@@ -232,9 +236,13 @@ export const register: Register = on => {
     }
     if (!isOwn && stamp?.note !== true) return next(e)
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const offset = await read($, offsetMs)
     const shown = displayOf(e.props.text)
+    const isOpen = shown.hidden !== '' && (await read($, opened)).includes(e.requestId)
+    const toggle = async () => {
+      await update($, opened, all => (all.includes(e.requestId) ? all.filter(id => id !== e.requestId) : [...all, e.requestId]))
+    }
     const all = [
       ...(origin.kind === 'plugin' ? [{ key: 'name', text: capped(origin.name) }] : []),
       ...(stamp?.n === undefined ? [] : [{ key: 'count', text: `${COUNT_ICON} ${stamp.n}` }]),
@@ -255,9 +263,15 @@ export const register: Register = on => {
         <Box borderStyle="round" borderColor={BORDER} paddingX={1} flexDirection="row">
           <Text color={BORDER}>❯ </Text>
           <Box flexGrow={1} flexShrink={1} flexDirection="column">
-            <Text>{shown.head}</Text>
-            {shown.hidden !== '' && <Text dimColor>… {shown.hidden}</Text>}
-            {shown.hidden !== '' && <Text>{shown.tail}</Text>}
+            <Text>{isOpen ? wholeOf(e.props.text) : shown.head}</Text>
+            {shown.hidden !== '' && !isOpen && (
+              <Box flexDirection="row">
+                <Text dimColor>… {shown.hidden}  </Text>
+                <Button key="expand" onPress={toggle}>expand</Button>
+              </Box>
+            )}
+            {shown.hidden !== '' && !isOpen && <Text>{shown.tail}</Text>}
+            {isOpen && <Button key="collapse" onPress={toggle}>collapse</Button>}
           </Box>
         </Box>
         {title !== undefined && (

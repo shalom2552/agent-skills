@@ -1,4 +1,5 @@
 import type { On, RenderInput } from 'claude-code'
+import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { clockOf, displayOf, parseOffset, storedStampsOf, unwrapPastes } from '../hooks/register'
@@ -34,6 +35,15 @@ function world(on: On, zone = '+0300\n', store?: Map<string, unknown>) {
   on('ui.render', { component: 'UserMessage' }, () => ({ type: 'Text', props: {}, children: ['engine'] }))
   return mock.clock(on, { now: 0 })
 }
+
+const MOUNT = (requestId: string, text: string): MountTarget<'terminal', 'UserMessage'> => ({
+  plugin: 'frame',
+  surface: 'terminal',
+  component: 'UserMessage',
+  requestId,
+  viewport: { columns: 100, rows: 40 },
+  props: { text, origin: { kind: 'composer' }, isExpanded: false },
+})
 
 const prompt = (uuid: string, text: string) => ({
   message: { type: 'user' as const, role: 'user' as const, content: [{ type: 'text' as const, text }] },
@@ -241,5 +251,43 @@ describe('register', () => {
     await $.session.append(prompt('u2', 'b'))
 
     expect(textOf(await $.ui.render(ROW('u2', 'b')))).toContain('\uea6b 1 ·')
+  })
+
+  test('a cut prompt expands to the whole text and collapses again', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const long = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n')
+    await $.session.append(prompt('u1', long))
+    await $.session.append(prompt('u2', long))
+
+    const ui = await $.ui.mount(MOUNT('u1', long))
+    const other = await $.ui.mount(MOUNT('u2', long))
+    expect(textOf(await ui.drawn())).toContain('… +44 lines  expand')
+    expect(textOf(await ui.drawn())).not.toContain('line 30')
+    expect(await ui.find({ type: 'Button', key: 'collapse' })).toBeUndefined()
+
+    await ui.press({ key: 'expand' })
+    const open = textOf(await ui.drawn())
+    expect(open).toContain(long)
+    expect(open).not.toContain('+44 lines')
+    expect(open).toContain('line 60collapse')
+    expect(await ui.find({ type: 'Button', key: 'expand' })).toBeUndefined()
+    expect(textOf(await other.drawn())).toContain('+44 lines')
+
+    await ui.press({ key: 'collapse' })
+    expect(textOf(await ui.drawn())).toContain('… +44 lines  expand')
+    expect(textOf(await ui.drawn())).not.toContain('line 30')
+    await ui.unmount()
+    await other.unmount()
+  })
+
+  test('a prompt that is not cut has no button', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.session.append(prompt('u1', 'short'))
+
+    const ui = await $.ui.mount(MOUNT('u1', 'short'))
+    expect(await ui.findAll({ type: 'Button' })).toEqual([])
+    await ui.unmount()
   })
 })
