@@ -894,6 +894,7 @@ bound_install() {
   bound_fragment "$src"
   [[ -n "$BOUND" ]] || return 0
   name="${BOUND##*/}"
+  (( DO_UPDATE )) && ! marker_ours "$(sidecar_marker "$root/settings/$type/${name%.settings.json}.json")" && return 0
   emit_as settings
   fragment_install "$BOUND" "$dest" "$root" "$type/${name%.settings.json}.json" "$name"
   EMIT_TYPE="$prev"
@@ -1471,6 +1472,17 @@ count_types() {
   printf '%s' "${out:-no entries}"
 }
 
+# keeps the ROWS install already put under root, for an update that adds nothing
+installed_rows() {
+  local root="$1" row type src dest_rel meta entry kept=()
+  for row in ${ROWS[@]+"${ROWS[@]}"}; do
+    unpack_row "$row"
+    entry_state "$src" "$root/$dest_rel/$entry" "$type"
+    [[ "$ENTRY_STATE" == current || "$ENTRY_STATE" == outdated ]] && kept+=("$row")
+  done
+  ROWS=( ${kept[@]+"${kept[@]}"} )
+}
+
 # one heading per asset type, so the run reads the way the picker looked
 install_entries() {
   local root="$1" row type src dest_rel meta entry dest_dir last="" why
@@ -1490,6 +1502,10 @@ install_entries() {
       continue
     fi
     dest_dir="$root/$dest_rel"
+    if (( DO_UPDATE )); then
+      MODE="copy"
+      [[ -L "$dest_dir/$entry" ]] && MODE="link"
+    fi
     if [[ -z "${made[$dest_dir]+x}" ]]; then
       run mkdir -p -- "$dest_dir"
       made[$dest_dir]=1
@@ -1557,7 +1573,7 @@ FLAGS
   -f, --force           Replace destinations install did not create
   -n, --dry-run         Print what would happen, change nothing
   -l, --list            List entries and exit
-  -u, --update          Update the checkout behind linked entries and exit
+  -u, --update          Pull the checkout, then refresh only what is installed
   -h, --help            Show this help
 
 NAMES
@@ -1674,20 +1690,14 @@ main() {
     INTERACTIVE=1
   fi
 
-  if (( DO_UPDATE )); then
-    fetch_ready
-    fetch_source
-    return 0
-  fi
-
   local bannered=0
-  if ! local_source || [[ "$REPO_ROOT" -ef "$SOURCE_HOME" ]]; then
+  if (( DO_UPDATE )) || ! local_source || [[ "$REPO_ROOT" -ef "$SOURCE_HOME" ]]; then
     if (( ! DO_LIST )); then
       banner
       bannered=1
     fi
     fetch_ready
-    (( INTERACTIVE )) && wizard_fetch
+    (( INTERACTIVE && ! DO_UPDATE )) && wizard_fetch
     fetch_source
   fi
 
@@ -1701,9 +1711,14 @@ main() {
   (( DO_LIST )) && { list_assets; return 0; }
 
   (( bannered )) || banner
-  (( INTERACTIVE )) && wizard
-
   local root
+  if (( DO_UPDATE )); then
+    installed_rows "$(resolve_root)"
+    MODE="as installed"
+  elif (( INTERACTIVE )); then
+    wizard
+  fi
+
   root="$(resolve_root)"
   LABEL_WIDTH="$(compute_label_width)"
 
