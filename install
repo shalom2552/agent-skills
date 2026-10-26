@@ -344,7 +344,10 @@ enumerate_entries() {
     shopt -s nullglob
     cd -- "$src" || exit 0
     # shellcheck disable=SC2086 # glob is data and must expand
-    for entry in $glob; do printf '%s\n' "${entry%/}"; done
+    for entry in $glob; do
+      [[ "$entry" == *.settings.json ]] && continue  # an entry's bound settings, not an entry
+      printf '%s\n' "${entry%/}"
+    done
   )
 }
 
