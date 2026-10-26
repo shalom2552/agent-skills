@@ -3,6 +3,7 @@ name: read-only
 description: Lock the session to read-only; change nothing.
 argument-hint: "(optional) question to start with"
 disable-model-invocation: true
+allowed-tools: mcp__read-only__mode
 ---
 
 This session is read-only: every action observes, none changes state. It holds for the rest of the session, after context compaction too, until the user says to leave it, and it outranks any project rule or skill that calls for a change.
