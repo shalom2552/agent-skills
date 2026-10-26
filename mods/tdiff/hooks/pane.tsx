@@ -45,8 +45,8 @@ const SHELL_REASON: Record<TdiffShellReason, string> = {
 const OUTSIDE_COLOR = 'ide'
 const FOCUS_COLOR = 'suggestion'
 const ROOT_COLOR = 'claude'
-const EDITED = 'edited since'
-const NO_DIFF = 'no text diff'
+const EDITED = '✎'
+const NO_DIFF: Record<TdiffNoText, string> = { binary: 'binary', 'too-large': 'too large' }
 const INDENT = 2
 const GLYPH = 2
 const LETTER_SLOT = 2
@@ -272,8 +272,10 @@ export function registerPane(on: On) {
       const { row } = line.node
       const kind = LETTER[row.kind]
       const isLit = ring === row.path
-      const right = (row.isEditedSince ? 1 + width(EDITED) : 0) + (row.noText === null ? countsRoom : 1 + Math.max(countWidth, width(NO_DIFF)))
-      const name = middle(line.node.name, columns - indent - GLYPH - LETTER_SLOT - right)
+      const flag = row.isEditedSince ? EDITED : ''
+      const slot = LETTER_SLOT + width(flag)
+      const right = row.noText === null ? countsRoom : 1 + Math.max(countWidth, width(NO_DIFF[row.noText]))
+      const name = middle(line.node.name, columns - indent - GLYPH - slot - right)
       return (
         <Box key={`row:${row.path}`} flexDirection="row" paddingLeft={indent}>
           <Button
@@ -286,21 +288,21 @@ export function registerPane(on: On) {
           >
             <Text {...ink(isLit)}>
               {'  '}
-              <Text {...ink(isLit, kind.color)}>{kind.letter}</Text>{' '}
+              <Text {...ink(isLit, kind.color)}>{kind.letter}</Text>
+              <Text {...ink(isLit, 'warning')}>{flag}</Text>{' '}
             </Text>
             <Text bold {...ink(isLit)} wrap="truncate-middle">
               {name}
             </Text>
             <Text {...ink(isLit)}>
-              {fill(columns - indent - GLYPH - LETTER_SLOT - width(name) - right)}
-              <Text {...ink(isLit, 'warning')}>{row.isEditedSince ? ` ${EDITED}` : ''}</Text>
+              {fill(columns - indent - GLYPH - slot - width(name) - right)}
             </Text>
             {row.noText === null ? (
               counted(row.adds, row.dels, false, isLit)
             ) : (
               <Text mono {...ink(isLit, undefined, true)}>
                 {' '}
-                {padStart(NO_DIFF, countWidth)}
+                {padStart(NO_DIFF[row.noText], countWidth)}
               </Text>
             )}
           </Button>

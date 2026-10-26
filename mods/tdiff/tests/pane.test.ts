@@ -81,8 +81,8 @@ for (const surface of SURFACES) {
         '~/proj',
         '▾ src/',
         '    M app.ts +2 -1',
-        '    A new.ts edited since +1 -0',
-        '  A logo.bin no text diff',
+        '    A✎ new.ts +1 -0',
+        '  A logo.bin binary',
         'Elsewhere',
         '▾ /opt/other/',
         '    A x.txt +1 -0',
@@ -91,11 +91,13 @@ for (const surface of SURFACES) {
       ])
       const raw = screen(await ui.drawn())
       expect(raw[3]?.endsWith(' +2 -1')).toBe(true)
-      expect(raw[5]?.endsWith(' no text diff')).toBe(true)
+      expect(raw[5]?.endsWith(' binary')).toBe(true)
       expect(await ui.find({ type: 'Text', text: /^\+3$/ })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /^\+2$/ }))?.props.color).toBe('success')
 
       const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(one => one.text === text)?.props
+      expect((await colorOf('✎'))?.color).toBe('warning')
+      expect((await ui.findAll({ type: 'Text' })).find(one => one.text.trim() === 'binary')?.props.dimColor).toBe(true)
       expect((await colorOf('app.ts'))?.bold).toBe(true)
       expect((await colorOf('~/proj'))?.color).toBe('claude')
       expect((await colorOf('Elsewhere'))?.color).toBe('ide')
@@ -200,6 +202,30 @@ for (const surface of SURFACES) {
       for (const line of rows) expect(Array.from(line).length).toBeLessThanOrEqual(40)
       expect(rows[0]).toMatch(/^▾ \/var\/tmp\/.*….*\/demo\/ *$/)
       expect(rows.some(line => /^ {4}A a-very.*….*\.ts \+1 -0$/.test(line))).toBe(true)
+      await ui.unmount()
+    })
+
+    test('flags stay compact so names still show at 24 columns', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      await $.session.start({ cwd: w.root, ...START })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/notes.txt`, content: 'claude\n' })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/logo.png`, content: 'a\0b' })
+      w.put(`${w.root}/dump.sql`, 'x', 5 * 1024 * 1024)
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/dump.sql`, content: 'y' })
+      w.put(`${w.root}/dump.sql`, 'y', 6 * 1024 * 1024)
+      await $.turn.complete(DONE)
+      await w.clock.advance(1_000)
+      w.put(`${w.root}/notes.txt`, 'mine\n')
+      await $.turn.complete(DONE)
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, bodyColumns: 24 } })
+      const rows = screen(await ui.drawn()).filter(line => /^ *[AMD]/.test(line))
+      expect(rows.map(line => line.trimEnd().replace(/(\S) +/g, '$1 '))).toEqual([
+        '  M✎ dump.sql too large',
+        '  A logo.png binary',
+        '  A✎ notes.txt +1 -0',
+      ])
+      for (const line of rows) expect(Array.from(line).length).toBeLessThanOrEqual(24)
       await ui.unmount()
     })
 
