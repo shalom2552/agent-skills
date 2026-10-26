@@ -17,6 +17,8 @@ const MAX_SESSIONS = 50
 const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
 const DIFF_PREFIX = 'diff:'
+const SWITCH_POLL_MS = 200
+const SWITCH_POLLS = 25
 
 const BLUE = '#89b4fa'
 const SURFACE0 = '#313244'
@@ -29,7 +31,10 @@ const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const GIT_ICON = ''
 
+type Engine = EngineInterface
+
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+const noop = () => undefined
 
 export const human = (n: number) => {
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}M`
@@ -105,6 +110,7 @@ let poll: Timer | undefined
 let refreshing: Promise<void> | undefined
 let isStale = false
 let saving: Promise<unknown> = Promise.resolve()
+let sessionId: string | undefined
 
 function refreshSoon($: EngineInterface) {
   isStale = true
@@ -127,6 +133,37 @@ function save($: EngineInterface) {
     if (id !== undefined) await settled(persist($, DIFF_PREFIX, id, await read($, diff)))
   })
   return saving
+}
+
+async function restore($: Engine) {
+  const id = await settled($.session.id())
+  if (id === undefined || id === sessionId) return
+  sessionId = id
+  const before = await read($, diff)
+  const stored = storedDiffOf(await settled($.store.get(DIFF_PREFIX + id)))
+  const base = stored ?? (await rebuilt($))
+  const now = await update($, diff, d => ({ added: base.added + d.added - before.added, removed: base.removed + d.removed - before.removed }))
+  if (stored === undefined) await settled(persist($, DIFF_PREFIX, id, now))
+}
+
+function ensure($: Engine) {
+  saving = saving.then(() => restore($)).catch(noop)
+  return saving
+}
+
+function followSwitch($: Engine, endedId: string) {
+  let polls = 0
+  const timer = $.clock.every(SWITCH_POLL_MS, () => {
+    polls += 1
+    void $.session
+      .id()
+      .then(async id => {
+        if (id === endedId && polls < SWITCH_POLLS) return
+        timer.cancel()
+        if (id !== endedId) await ensure($)
+      })
+      .catch(noop)
+  })
 }
 
 async function refresh($: EngineInterface) {
@@ -168,14 +205,7 @@ async function refresh($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const id = await settled($.session.id())
-    if (id !== undefined) {
-      const before = await read($, diff)
-      const stored = storedDiffOf(await settled($.store.get(DIFF_PREFIX + id)))
-      const base = stored ?? (await rebuilt($))
-      await update($, diff, d => ({ added: base.added + d.added - before.added, removed: base.removed + d.removed - before.removed }))
-      if (stored === undefined) await save($)
-    }
+    await ensure($)
     await refreshSoon($)
     poll?.cancel()
     poll = $.clock.every(POLL_MS, () => void refreshSoon($))
@@ -196,7 +226,12 @@ export const register: Register = on => {
       stepEffort = undefined
       await update($, diff, () => NO_DIFF)
     }
-    return next(e)
+    const ended = await next(e)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ensure($)
+      if (sessionId === e.sessionId) followSwitch($, e.sessionId)
+    }
+    return ended
   })
 
   on('tool.call', async ($, e, next) => {

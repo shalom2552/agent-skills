@@ -12,6 +12,8 @@ const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
 const CALLS_PREFIX = 'calls:'
 const TURNS_PREFIX = 'turns:'
+const SWITCH_POLL_MS = 200
+const SWITCH_POLLS = 25
 const MAX_TARGET = 1000
 const MAX_LABEL = 16
 const INDENT = 2
@@ -95,8 +97,10 @@ const turnName = (n: number) => (n === 0 ? 'Before first turn' : `Turn ${n}`)
 
 const shortTool = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool)
 
-type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session'>
+type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session' | 'clock'>
 type Live = { turn: number; sessionId?: string; queue: Promise<unknown> }
+
+const live: Live = { turn: 0, queue: Promise.resolve() }
 
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
 
@@ -118,7 +122,7 @@ export const storedListOf = <T,>(raw: unknown, field: string): T[] => {
   return Array.isArray(list) ? list : []
 }
 
-async function adopt($: Engine, live: Live, id: string) {
+async function adopt($: Engine, id: string) {
   live.sessionId = id
   const savedCalls = storedListOf<TapeCall>(await settled($.store.get(CALLS_PREFIX + id)), 'calls').map(call =>
     call.status === 'running' ? { ...call, status: 'error' as const } : call,
@@ -131,35 +135,48 @@ async function adopt($: Engine, live: Live, id: string) {
   await update($, open, () => null)
 }
 
-async function sync($: Engine, live: Live) {
+async function sync($: Engine) {
   const id = await settled($.session.id())
-  if (id !== undefined && id !== live.sessionId) await adopt($, live, id)
+  if (id !== undefined && id !== live.sessionId) await adopt($, id)
 }
 
-function enqueue(live: Live, task: () => Promise<unknown>) {
+function enqueue(task: () => Promise<unknown>) {
   live.queue = live.queue.then(task).catch(noop)
   return live.queue
 }
 
-function ensure($: Engine, live: Live) {
-  return enqueue(live, () => sync($, live))
+function ensure($: Engine) {
+  return enqueue(() => sync($))
 }
 
-function saveCalls($: Engine, live: Live) {
-  return enqueue(live, async () => {
+function followSwitch($: Engine, endedId: string) {
+  let polls = 0
+  const timer = $.clock.every(SWITCH_POLL_MS, () => {
+    polls += 1
+    void $.session
+      .id()
+      .then(async id => {
+        if (id === endedId && polls < SWITCH_POLLS) return
+        timer.cancel()
+        if (id !== endedId) await ensure($)
+      })
+      .catch(noop)
+  })
+}
+
+function saveCalls($: Engine) {
+  return enqueue(async () => {
     if (live.sessionId !== undefined) await persist($, CALLS_PREFIX, live.sessionId, { calls: await read($, calls) })
   })
 }
 
-function saveTurns($: Engine, live: Live) {
-  return enqueue(live, async () => {
+function saveTurns($: Engine) {
+  return enqueue(async () => {
     if (live.sessionId !== undefined) await persist($, TURNS_PREFIX, live.sessionId, { turns: await read($, turns) })
   })
 }
 
 export const register: Register = on => {
-  const live: Live = { turn: 0, queue: Promise.resolve() }
-
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -167,7 +184,7 @@ export const register: Register = on => {
       description: 'Toggle a live pane of tool calls, grouped by turn',
       immediate: true,
     })
-    await ensure($, live)
+    await ensure($)
     return started
   })
 
@@ -182,29 +199,32 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    await saveCalls($, live)
-    await saveTurns($, live)
+    await saveCalls($)
+    await saveTurns($)
     const ended = await next(e)
-    if (e.reason === 'clear' || e.reason === 'resume') await ensure($, live)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ensure($)
+      if (live.sessionId === e.sessionId) followSwitch($, e.sessionId)
+    }
     return ended
   })
 
   on('turn.start', async ($, e, next) => {
-    await ensure($, live)
+    await ensure($)
     live.turn += 1
     const entry: TapeTurn = { n: live.turn, prompt: labelOf(e.text) }
     await update($, turns, list => [...list, entry].slice(-MAX_TURNS))
-    await saveTurns($, live)
+    await saveTurns($)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    await saveCalls($, live)
+    await saveCalls($)
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    await ensure($, live)
+    await ensure($)
     const call: TapeCall = {
       id: e.tool_use_id,
       turn: live.turn,
@@ -216,7 +236,7 @@ export const register: Register = on => {
     }
     const before = (await read($, calls)).length
     await update($, calls, list => [...list, call].slice(-MAX_CALLS))
-    await saveCalls($, live)
+    await saveCalls($)
     if (before === 0 && !(await $.ui.panes()).some(pane => pane.id === PANE)) {
       await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
     }
@@ -229,7 +249,7 @@ export const register: Register = on => {
     } finally {
       const endedAt = await $.clock.now()
       await update($, calls, list => list.map(one => (one.id === call.id ? { ...one, status, endedAt } : one)))
-      await saveCalls($, live)
+      await saveCalls($)
     }
   })
 

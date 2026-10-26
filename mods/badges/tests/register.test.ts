@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { skillsOf, storedSkillsOf } from '../hooks/register'
 import { textOf } from './text-of'
@@ -17,8 +17,8 @@ const PROPS = {
   isFocused: false,
 }
 
-function world(on: On, store = new Map<string, unknown>()) {
-  on('session.id', () => ({ value: 's1' }))
+function world(on: On, store = new Map<string, unknown>(), session = { id: 's1' }) {
+  on('session.id', () => ({ value: session.id }))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
     store.set(e.key, e.value)
@@ -35,6 +35,8 @@ function world(on: On, store = new Map<string, unknown>()) {
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine'] }))
   return store
 }
+
+const ABOVE = { component: 'AbovePrompt', surface: 'terminal', requestId: 'b', props: PROPS } as const
 
 describe('register', () => {
   test('a listed skill shows its badge, an unlisted one does not', async ($, on) => {
@@ -66,15 +68,45 @@ describe('register', () => {
 
   test('badges are saved under the session and restored on start', async ($, on) => {
     const store = world(on)
+    await $.session.start(SESSION)
     await $.skill.prompt({ skill: 'dotconf', text: '' })
     expect(store.get('skills:s1')).toEqual({ version: 1, skills: ['dotconf'] })
     expect(store.get('sessions')).toEqual(['s1'])
+  })
 
-    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
-    expect(textOf(await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', requestId: 'b', props: PROPS }))).not.toContain('DOTCONF')
-
+  test('a restart restores the saved badges', async ($, on) => {
+    world(on, new Map<string, unknown>([['sessions', ['s1']], ['skills:s1', { version: 1, skills: ['dotconf'] }]]))
     await $.session.start(SESSION)
-    expect(textOf(await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', requestId: 'b', props: PROPS }))).toContain('DOTCONF')
+    expect(textOf(await $.ui.render(ABOVE))).toContain('DOTCONF')
+  })
+
+  test('resume shows the resumed session badges once its id is ready', async ($, on) => {
+    const clock = mock.clock(on, { now: 0 })
+    const session = { id: 's1' }
+    const store = world(on, new Map<string, unknown>([['sessions', ['s2']], ['skills:s2', { version: 1, skills: ['system-audit'] }]]), session)
+    await $.session.start(SESSION)
+    await $.skill.prompt({ skill: 'dotconf', text: '' })
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } })
+    expect(textOf(await $.ui.render(ABOVE))).not.toContain('DOTCONF')
+
+    session.id = 's2'
+    await clock.advance(200)
+    const text = textOf(await $.ui.render(ABOVE))
+    expect(text).toContain('AUDIT')
+    expect(text).not.toContain('DOTCONF')
+    expect(store.get('skills:s1')).toEqual({ version: 1, skills: ['dotconf'] })
+  })
+
+  test('clear drops the badges', async ($, on) => {
+    const clock = mock.clock(on, { now: 0 })
+    const session = { id: 's1' }
+    world(on, new Map(), session)
+    await $.session.start(SESSION)
+    await $.skill.prompt({ skill: 'dotconf', text: '' })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    session.id = 's2'
+    await clock.advance(200)
+    expect(textOf(await $.ui.render(ABOVE))).not.toContain('DOTCONF')
   })
 
   test('the oldest sessions are evicted', async ($, on) => {

@@ -221,6 +221,35 @@ describe('register', () => {
     expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
   })
 
+  test('/clear empties the tape once the new id is ready', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'x', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    w.session.id = 's2'
+    await w.clock.advance(200)
+
+    expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(1)
+  })
+
+  test('resume swaps tapes once the resumed id is ready', async ($, on) => {
+    const w = world(on, { sessions: ['s2'], ...saved('s2', 1, 'other.ts') })
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'mine', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls mine' })
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } })
+    w.session.id = 's2'
+    await w.clock.advance(200)
+
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('other.ts')
+    expect(text).not.toContain('ls mine')
+  })
+
   test('calls are saved and come back after a restart', async ($, on) => {
     const w = world(on, saved('s1', 4, 'kept.ts', 'running'))
     on('tool.call', () => ({ result: 'ran' }))

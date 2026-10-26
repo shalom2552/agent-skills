@@ -30,11 +30,12 @@ const SETTINGS: Settings = { effortLevel: 'high', modelSettings: { 'claude-opus-
 
 function world(on: On, { store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
   const clock = mock.clock(on, { now: 0 })
+  const session = { id }
   const runs: string[][] = []
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: USAGE }))
-  on('session.id', () => ({ value: id }))
+  on('session.id', () => ({ value: session.id }))
   on('session.messages', () => ({ value: messages }))
   on('settings.read', () => ({ value: settings }))
   on('process.run', ($, e) => {
@@ -57,7 +58,7 @@ function world(on: On, { store = new Map(), messages = [], id = 's1', settings =
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('tool.call', ($, e) => (e.tool === 'Read' ? { result: 'text', isReadOnly: true as const } : { result: e.tool === 'Write' ? CREATE : EDIT }))
   on('ui.render', { component: 'PromptHint' }, () => ({ type: 'Text', props: {}, children: ['engine hint'] }))
-  return { store, runs, clock }
+  return { store, runs, clock, session }
 }
 
 describe('register', () => {
@@ -172,6 +173,21 @@ describe('register', () => {
     await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
     await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
     expect(textOf(await $.ui.render(HINT()))).not.toContain('+1/-1')
+  })
+
+  test('resume shows the resumed session total once its id is ready', async ($, on) => {
+    const { store, clock, session } = world(on, { store: new Map([['sessions', ['s2']], ['diff:s2', { version: 1, added: 281, removed: 8 }]]) })
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } })
+    expect(textOf(await $.ui.render(HINT()))).not.toContain('+1/-1')
+
+    session.id = 's2'
+    await clock.advance(200)
+    expect(textOf(await $.ui.render(HINT()))).toContain('+281/-8')
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    expect(store.get('diff:s2')).toEqual({ version: 1, added: 282, removed: 9 })
+    expect(store.get('diff:s1')).toEqual({ version: 1, added: 1, removed: 1 })
   })
 
   test('saves land in order', async ($, on) => {
