@@ -24,17 +24,17 @@ const USAGE: SessionUsage = {
 const EDIT = { structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-line two', '+line 2'] }] }
 const CREATE = { type: 'create', structuredPatch: [], originalFile: null, content: 'line one\nline two\n' }
 
-type World = { store?: Map<string, unknown>; messages?: SessionMessage[]; id?: string; settings?: Settings; isDetached?: boolean }
+type World = { usage?: SessionUsage; store?: Map<string, unknown>; messages?: SessionMessage[]; id?: string; settings?: Settings; isDetached?: boolean }
 
 const SETTINGS: Settings = { effortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
 
-function world(on: On, { store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
+function world(on: On, { usage = USAGE, store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
   const clock = mock.clock(on, { now: 0 })
   const session = { id }
   const runs: string[][] = []
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: USAGE }))
+  on('session.usage', () => ({ value: usage }))
   on('session.id', () => ({ value: session.id }))
   on('session.messages', () => ({ value: messages }))
   on('settings.read', () => ({ value: settings }))
@@ -97,6 +97,12 @@ describe('register', () => {
     expect(row).toContain('12%')
     expect(row).toContain('5h 72% ↻2h')
     expect(row).toContain('engine hint')
+  })
+
+  test('cost keeps two decimals', async ($, on) => {
+    world(on, { usage: { ...USAGE, cost: { usd: 2.5 } } })
+    await $.session.start(SESSION)
+    expect(textOf(await $.ui.render(HINT()))).toContain('$2.50')
   })
 
   test('adds edits and writes to the diff and saves it', async ($, on) => {

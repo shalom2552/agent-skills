@@ -2,7 +2,7 @@ import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { clip, flatten, labelOf, storedListOf, targetOf } from '../hooks/register'
+import { clip, flatten, formatSeconds, labelOf, storedListOf, targetOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -76,6 +76,13 @@ describe('register', () => {
     expect(targetOf({ command: '\n  npm test\nmore' }, '/work')).toBe('npm test ⏎ more')
     expect(targetOf({ command: '  ', description: 'list' }, '/work')).toBe('list')
     expect(targetOf({ other: 1 }, '/work')).toBe('')
+  })
+
+  test('durations show tenths, then seconds, then minutes', () => {
+    expect(formatSeconds(1_240)).toBe('1.2s')
+    expect(formatSeconds(45_000)).toBe('45s')
+    expect(formatSeconds(65_000)).toBe('1m 5s')
+    expect(formatSeconds(3_720_000)).toBe('1h 2m')
   })
 
   test('flatten joins lines, collapses space and strips cwd', () => {

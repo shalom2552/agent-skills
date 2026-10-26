@@ -88,7 +88,15 @@ const labelOfCall = (call: TapeCall) => {
   return call.isAgent ? `↳${name}` : name
 }
 
-export const formatSeconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`)
+export const formatDuration = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+export const formatSeconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : formatDuration(ms))
 
 const timeOf = (call: TapeCall) =>
   call.endedAt !== undefined ? formatSeconds(call.endedAt - call.startedAt) : call.status === 'running' ? '…' : ''

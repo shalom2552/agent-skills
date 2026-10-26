@@ -355,7 +355,7 @@ export const register: Register = on => {
           </Box>
           <Box flexGrow={1} minWidth={1} />
           <Box flexDirection="row" flexShrink={0}>
-            {s.cost === undefined ? null : <Text color={GREEN} bold>{`$${Math.round(s.cost * 100) / 100} `}</Text>}
+            {s.cost === undefined ? null : <Text color={GREEN} bold>{`$${s.cost.toFixed(2)} `}</Text>}
             {pills('l', [
               { color: PILL_BG, body: ctx },
               { color: BLUE, body: lim },
