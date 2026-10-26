@@ -31,6 +31,7 @@ readonly INSTALLER_ID="$REPO_URL"
 readonly ASSET_TYPES=(
   "skills|skills|skills|*/|SKILL.md"
   "scripts|scripts|scripts|*.sh|."
+  "themes|themes|themes|*.json|."
   "mods|mods|-|*/|.claude-plugin/plugin.json"
   "settings|settings|settings|*.json|."
 )
