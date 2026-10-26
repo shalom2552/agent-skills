@@ -81,21 +81,21 @@ describe('register', () => {
     expect(unwrapPastes('plain')).toBe('plain')
   })
 
-  test('a prompt over 40 lines shows its first 12 and last 4 lines', () => {
+  test('a prompt over 40 lines shows its first 16 lines', () => {
     const lines = Array.from({ length: 41 }, (_, i) => `line ${i + 1}`)
-    expect(displayOf(lines.join('\n'))).toEqual({ head: lines.slice(0, 12).join('\n'), hidden: '+25 lines', tail: lines.slice(-4).join('\n') })
-    expect(displayOf(lines.slice(0, 40).join('\n'))).toEqual({ head: lines.slice(0, 40).join('\n'), hidden: '', tail: '' })
+    expect(displayOf(lines.join('\n'))).toEqual({ head: lines.slice(0, 16).join('\n'), hidden: '+25 lines' })
+    expect(displayOf(lines.slice(0, 40).join('\n'))).toEqual({ head: lines.slice(0, 40).join('\n'), hidden: '' })
   })
 
   test('a long prompt with few lines is cut by chars', () => {
     const long = `${'a'.repeat(2_500)}${'\n'.repeat(3)}${'b'.repeat(48_000)}${'c'.repeat(2_500)}`
-    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hidden: '+48k chars', tail: 'c'.repeat(2_500) })
-    expect(displayOf('short')).toEqual({ head: 'short', hidden: '', tail: '' })
+    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hidden: '+51k chars' })
+    expect(displayOf('short')).toEqual({ head: 'short', hidden: '' })
   })
 
   test('long lines past 40 fall back to the char cut', () => {
     const long = Array.from({ length: 41 }, () => 'x'.repeat(1_000)).join('\n')
-    expect(displayOf(long).hidden).toBe('+36k chars')
+    expect(displayOf(long).hidden).toBe('+39k chars')
   })
 
   test('a pasted prompt is framed without its wrapper', async ($, on) => {
@@ -262,21 +262,22 @@ describe('register', () => {
 
     const ui = await $.ui.mount(MOUNT('u1', long))
     const other = await $.ui.mount(MOUNT('u2', long))
-    expect(textOf(await ui.drawn())).toContain('… +44 lines  expand')
-    expect(textOf(await ui.drawn())).not.toContain('line 30')
+    const cut = textOf(await ui.drawn())
+    expect(cut).toContain('line 16+44 lines  [ expand ]')
+    expect(cut).not.toContain('line 17')
+    expect(cut).not.toContain('…')
     expect(await ui.find({ type: 'Button', key: 'collapse' })).toBeUndefined()
+    expect(JSON.stringify(await ui.find({ type: 'Button', key: 'expand' }))).toContain('"color":"suggestion"')
 
     await ui.press({ key: 'expand' })
     const open = textOf(await ui.drawn())
-    expect(open).toContain(long)
-    expect(open).not.toContain('+44 lines')
-    expect(open).toContain('line 60collapse')
+    expect(open).toContain(`${long}+44 lines  [ collapse ]`)
     expect(await ui.find({ type: 'Button', key: 'expand' })).toBeUndefined()
-    expect(textOf(await other.drawn())).toContain('+44 lines')
+    expect(textOf(await other.drawn())).toContain('+44 lines  [ expand ]')
 
     await ui.press({ key: 'collapse' })
-    expect(textOf(await ui.drawn())).toContain('… +44 lines  expand')
-    expect(textOf(await ui.drawn())).not.toContain('line 30')
+    expect(textOf(await ui.drawn())).toContain('line 16+44 lines  [ expand ]')
+    expect(textOf(await ui.drawn())).not.toContain('line 17')
     await ui.unmount()
     await other.unmount()
   })

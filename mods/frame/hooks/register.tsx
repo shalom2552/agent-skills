@@ -15,11 +15,9 @@ const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
 const STAMPS_PREFIX = 'stamps:'
 const MAX_LINES = 40
-const HEAD_LINES = 12
-const TAIL_LINES = 4
+const HEAD_LINES = 16
 const LONG = 10_000
 const HEAD = 2_500
-const TAIL = 2_500
 const PASTE = /\n{0,2}<pasted_content id="([0-9a-f]{4})">\n([\s\S]*?)\n<\/pasted_content id="\1">\n{0,2}/g
 const COMMAND_TAGS = /<command-(name|message|args)>[\s\S]*?<\/command-\1>/g
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/
@@ -86,11 +84,10 @@ export const displayOf = (text: string) => {
   const lines = shown.split('\n')
   if (lines.length > MAX_LINES) {
     const head = lines.slice(0, HEAD_LINES).join('\n')
-    const tail = lines.slice(-TAIL_LINES).join('\n')
-    if (head.length + tail.length <= LONG) return { head, hidden: `+${lines.length - HEAD_LINES - TAIL_LINES} lines`, tail }
+    if (head.length <= LONG) return { head, hidden: `+${lines.length - HEAD_LINES} lines` }
   }
-  if (shown.length <= LONG) return { head: shown, hidden: '', tail: '' }
-  return { head: shown.slice(0, HEAD), hidden: `+${Math.round((shown.length - HEAD - TAIL) / 1_000)}k chars`, tail: shown.slice(-TAIL) }
+  if (shown.length <= LONG) return { head: shown, hidden: '' }
+  return { head: shown.slice(0, HEAD), hidden: `+${Math.round((shown.length - HEAD) / 1_000)}k chars` }
 }
 
 export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
@@ -264,14 +261,14 @@ export const register: Register = on => {
           <Text color={BORDER}>❯ </Text>
           <Box flexGrow={1} flexShrink={1} flexDirection="column">
             <Text>{isOpen ? wholeOf(e.props.text) : shown.head}</Text>
-            {shown.hidden !== '' && !isOpen && (
+            {shown.hidden !== '' && (
               <Box flexDirection="row">
-                <Text dimColor>… {shown.hidden}  </Text>
-                <Button key="expand" onPress={toggle}>expand</Button>
+                <Text color={BORDER}>{shown.hidden}  </Text>
+                <Button key={isOpen ? 'collapse' : 'expand'} plain onPress={toggle}>
+                  <Text color={BORDER}>[ {isOpen ? 'collapse' : 'expand'} ]</Text>
+                </Button>
               </Box>
             )}
-            {shown.hidden !== '' && !isOpen && <Text>{shown.tail}</Text>}
-            {isOpen && <Button key="collapse" onPress={toggle}>collapse</Button>}
           </Box>
         </Box>
         {title !== undefined && (
