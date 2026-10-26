@@ -7,7 +7,7 @@ const turns = atom({ plugin: 'beat', key: 'turns' } as const, [])
 
 const MAX_TURNS = 200
 const MAX_SESSIONS = 50
-const STORE_VERSION = 1
+const STORE_VERSION = 2
 const SESSIONS_KEY = 'sessions'
 const TURNS_PREFIX = 'turns:'
 const BAR = 12
@@ -45,9 +45,10 @@ export const formatTokens = (n: number) => {
 }
 
 export const tokensOf = (usage: ModelUsage): BeatTokens => ({
-  input: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+  input: usage.input_tokens,
   output: usage.output_tokens,
   cacheRead: usage.cache_read_input_tokens,
+  cacheCreation: usage.cache_creation_input_tokens,
 })
 
 export type Stat = { key: string; parts: readonly (readonly [icon: string, value: string])[] }
@@ -55,8 +56,10 @@ export type Stat = { key: string; parts: readonly (readonly [icon: string, value
 export const statsOf = (turn: BeatTurn): Stat[] => {
   const stats: Stat[] = []
   if (turn.tokens !== undefined) {
-    stats.push({ key: 'io', parts: [['↑', formatTokens(turn.tokens.input)], ['↓', formatTokens(turn.tokens.output)]] })
-    if (turn.tokens.input > 0) stats.push({ key: 'cache', parts: [['\uf1c0 ', `${Math.round((turn.tokens.cacheRead / turn.tokens.input) * 100)}%`]] })
+    const { input, output, cacheRead, cacheCreation } = turn.tokens
+    const total = input + cacheRead + cacheCreation
+    stats.push({ key: 'io', parts: [['↑', formatTokens(input)], ['↓', formatTokens(output)]] })
+    if (total > 0) stats.push({ key: 'cache', parts: [['\uf1c0 ', `${Math.round((cacheRead / total) * 100)}%`]] })
   }
   if (turn.costUsd !== undefined) stats.push({ key: 'cost', parts: [['$', turn.costUsd.toFixed(2)]] })
   if (turn.contextPercent !== undefined) stats.push({ key: 'context', parts: [['\uf2db ', `${Math.round(turn.contextPercent)}%`]] })

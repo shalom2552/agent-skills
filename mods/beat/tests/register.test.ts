@@ -112,7 +112,7 @@ describe('register', () => {
     expect(formatTokens(999_949)).toBe('999.9k')
     expect(formatTokens(999_950)).toBe('1M')
     expect(formatTokens(2_340_000)).toBe('2.3M')
-    expect(tokensOf(USAGE)).toEqual({ input: 12_345, output: 1_800, cacheRead: 10_000 })
+    expect(tokensOf(USAGE)).toEqual({ input: 2_000, output: 1_800, cacheRead: 10_000, cacheCreation: 345 })
   })
 
   test('splits a turn into think, tools and write', async ($, on) => {
@@ -188,7 +188,7 @@ describe('register', () => {
     await $.turn.complete({ answer: 'hi', durationMs: 1_000, isAborted: false, turnId: 't', reason: 'answer', usage: USAGE })
 
     const line = textOf(await $.ui.render(LINE(1_000)))
-    expect(line).toContain('↑12.3k ↓1.8k')
+    expect(line).toContain('↑2k ↓1.8k')
     expect(line).toContain('\uf1c0 81%')
     expect(line).toContain('$0.04')
     expect(line).toContain('\uf2db 41%')
@@ -216,7 +216,7 @@ describe('register', () => {
     await $.turn.complete({ answer: 'hi', durationMs: 1_000, isAborted: false, turnId: 't', reason: 'answer', usage: USAGE })
 
     const line = textOf(await $.ui.render(LINE(1_000)))
-    expect(line).toContain('↑12.3k ↓1.8k')
+    expect(line).toContain('↑2k ↓1.8k')
     expect(line).not.toContain('$')
   })
 
@@ -229,7 +229,7 @@ describe('register', () => {
   })
 
   test('a turn with no input has no cache stat', () => {
-    const turn: BeatTurn = { durationMs: 1_000, think: 0, tools: 0, write: 1_000, other: 0, tokens: { input: 0, output: 0, cacheRead: 0 }, costUsd: 0.04, contextPercent: 41 }
+    const turn: BeatTurn = { durationMs: 1_000, think: 0, tools: 0, write: 1_000, other: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, costUsd: 0.04, contextPercent: 41 }
     expect(statsOf(turn).map(s => s.key)).toEqual(['io', 'cost', 'context'])
   })
 
@@ -241,9 +241,9 @@ describe('register', () => {
 
     const at = async (columns: number) => textOf(await $.ui.render(LINE(1_000, columns)))
     const has = (line: string) => ['↑', '\uf1c0', '$', '\uf2db', '\uf0eb', '━'].filter(mark => line.includes(mark))
-    expect(has(await at(63))).toEqual(['↑', '\uf1c0', '$', '\uf2db', '\uf0eb', '━'])
-    expect(has(await at(62))).toEqual(['↑', '\uf1c0', '$', '\uf0eb', '━'])
-    expect(has(await at(55))).toEqual(['\uf1c0', '$', '\uf0eb', '━'])
+    expect(has(await at(60))).toEqual(['↑', '\uf1c0', '$', '\uf2db', '\uf0eb', '━'])
+    expect(has(await at(59))).toEqual(['↑', '\uf1c0', '$', '\uf0eb', '━'])
+    expect(has(await at(52))).toEqual(['\uf1c0', '$', '\uf0eb', '━'])
     expect(has(await at(41))).toEqual(['$', '\uf0eb', '━'])
     expect(has(await at(34))).toEqual(['\uf0eb', '━'])
     expect(has(await at(26))).toEqual(['━'])
@@ -257,7 +257,7 @@ describe('register', () => {
     tools: 4_000,
     write: 2_000,
     other: 0,
-    tokens: { input: 12_345, output: 1_800, cacheRead: 10_000 },
+    tokens: { input: 2_000, output: 1_800, cacheRead: 10_000, cacheCreation: 345 },
     costUsd: 0.04,
     contextPercent: 41,
   }
@@ -278,11 +278,11 @@ describe('register', () => {
   })
 
   test('a resumed session draws its stored turns', async ($, on) => {
-    world(on, [], { store: new Map([['turns:s1', { version: 1, turns: [TURN] }]]) })
+    world(on, [], { store: new Map([['turns:s1', { version: 2, turns: [TURN] }]]) })
 
     const line = textOf(await $.ui.render(LINE(9_000)))
     expect(line).toContain(' 3s')
-    expect(line).toContain('↑12.3k ↓1.8k')
+    expect(line).toContain('↑2k ↓1.8k')
     expect(line).toContain('$0.04')
   })
 
@@ -292,11 +292,11 @@ describe('register', () => {
     await finish($, USAGE)
     await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
 
-    expect(textOf(await $.ui.render(LINE(1_000)))).toContain('↑12.3k ↓1.8k')
+    expect(textOf(await $.ui.render(LINE(1_000)))).toContain('↑2k ↓1.8k')
   })
 
   test('new turns add to the stored ones', async ($, on) => {
-    const store = new Map<string, unknown>([['turns:s1', { version: 1, turns: [TURN] }]])
+    const store = new Map<string, unknown>([['turns:s1', { version: 2, turns: [TURN] }]])
     world(on, [[[text('hi'), 1_000]]], { store })
     await finish($, USAGE)
 
@@ -305,7 +305,7 @@ describe('register', () => {
 
   test('the oldest sessions are evicted', async ($, on) => {
     const ids = Array.from({ length: 50 }, (_, i) => `old${i}`)
-    const store = new Map<string, unknown>([['sessions', ids], ...ids.map(id => [`turns:${id}`, { version: 1, turns: [TURN] }] as const)])
+    const store = new Map<string, unknown>([['sessions', ids], ...ids.map(id => [`turns:${id}`, { version: 2, turns: [TURN] }] as const)])
     world(on, [[[text('hi'), 1_000]]], { store })
     await finish($, USAGE)
 
@@ -317,7 +317,7 @@ describe('register', () => {
 
   test('a full store frees room before it saves', async ($, on) => {
     const ids = Array.from({ length: 50 }, (_, i) => `old${i}`)
-    const store = new Map<string, unknown>([['sessions', ids], ...ids.map(id => [`turns:${id}`, { version: 1, turns: [TURN] }] as const)])
+    const store = new Map<string, unknown>([['sessions', ids], ...ids.map(id => [`turns:${id}`, { version: 2, turns: [TURN] }] as const)])
     world(on, [[[text('hi'), 1_000]]], { store, maxKeys: store.size })
     await finish($, USAGE)
 
@@ -329,12 +329,12 @@ describe('register', () => {
     world(on, [[[text('hi'), 1_000]]], { failStore: true })
     await finish($, USAGE)
 
-    expect(textOf(await $.ui.render(LINE(1_000)))).toContain('↑12.3k ↓1.8k')
+    expect(textOf(await $.ui.render(LINE(1_000)))).toContain('↑2k ↓1.8k')
   })
 
   test('stored data is read defensively', () => {
-    expect(storedTurnsOf({ version: 1, turns: [TURN] })).toEqual([TURN])
-    expect(storedTurnsOf({ version: 0, turns: [TURN] })).toEqual([])
+    expect(storedTurnsOf({ version: 2, turns: [TURN] })).toEqual([TURN])
+    expect(storedTurnsOf({ version: 1, turns: [TURN] })).toEqual([])
     expect(storedTurnsOf('junk')).toEqual([])
     expect(storedTurnsOf(undefined)).toEqual([])
     expect(keptSessionsOf(['a', 'b', 7, 'c'], 'b')).toEqual(['a', 'c', 'b'])
