@@ -41,6 +41,7 @@ const MOUNT: MountTarget<'terminal', 'Pane'> = {
 function world(on: On, entries?: Record<string, unknown>) {
   const panes: UiPane[] = []
   const session = { id: 's1' }
+  const waiting = { reason: '' }
   const clock = mock.clock(on, { now: 0 })
   const store = new Map<string, unknown>(Object.entries(entries ?? {}))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
@@ -55,6 +56,7 @@ function world(on: On, entries?: Record<string, unknown>) {
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('ui.panes', () => ({ value: [...panes] }))
   on('ui.open', ($, e) => {
+    if (waiting.reason.length > 0) return { value: { isPlaced: false, reason: waiting.reason } }
     panes.push({ id: e.id, title: e.title ?? e.id, isShown: true, isFocused: false, isPlaced: true })
     return { value: { isPlaced: true } }
   })
@@ -62,7 +64,7 @@ function world(on: On, entries?: Record<string, unknown>) {
     panes.splice(panes.findIndex(p => p.id === e.id), 1)
     return { value: undefined }
   })
-  return { panes, clock, session, store }
+  return { panes, clock, session, store, waiting }
 }
 
 const saved = (id: string, turn: number, file: string, status = 'ok') => ({
@@ -174,6 +176,14 @@ describe('register', () => {
     expect(w.panes.map(p => p.id)).toEqual(['tape'])
     expect(await $.command.run(TAPE)).toEqual({ text: 'Tape closed.' })
     expect(w.panes).toEqual([])
+  })
+
+  test('/tape says why the pane waits', async ($, on) => {
+    const w = world(on)
+    w.waiting.reason = 'too narrow'
+    await $.session.start(SESSION)
+
+    expect(await $.command.run(TAPE)).toEqual({ text: 'Tape is waiting: too narrow' })
   })
 
   test('the first tool call opens the pane, later ones leave it closed', async ($, on) => {

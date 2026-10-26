@@ -202,8 +202,8 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Tape closed.' }
     }
-    await $.ui.open({ id: PANE, title: TITLE })
-    return { text: 'Tape opened.' }
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    return { text: opened.isPlaced ? 'Tape opened.' : `Tape is waiting: ${opened.reason}` }
   })
 
   on('session.end', async ($, e, next) => {
