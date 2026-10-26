@@ -216,6 +216,20 @@ describe('register', () => {
     expect(text.indexOf('Turn 2')).toBeLessThan(text.indexOf('Turn 1'))
   })
 
+  test('a subagent turn start adds no turn', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'spawn two', turnId: 't1' })
+    await $.turn.start({ text: 'agent prompt', turnId: 't2', agentId: 'a1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('Turn 1')
+    expect(text).not.toContain('agent prompt')
+    expect(storedListOf(w.store.get('turns:s1'), 'turns')).toEqual([{ n: 1, prompt: 'spawn two' }])
+  })
+
   test('/clear empties the tape', async ($, on) => {
     const w = world(on)
     on('tool.call', () => ({ result: 'ran' }))

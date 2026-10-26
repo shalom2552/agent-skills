@@ -218,6 +218,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     await ensure($)
     live.turn += 1
     const entry: TapeTurn = { n: live.turn, prompt: labelOf(e.text) }
