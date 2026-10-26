@@ -102,22 +102,24 @@ const lastOf =(all: Stamps) => Object.values(all).reduce((a, s) => Math.max(a, s
 const newest = (entries: [string, FrameStamp][]) =>
   Object.fromEntries(entries.sort(([, a], [, b]) => a.at - b.at).slice(-MAX_STAMPS))
 
-const load = async ($: EngineInterface, cache: Map<string, Stamps>, id: string) => {
+const load = async <T,>($: Pick<EngineInterface, 'store'>, cache: Map<string, T>, prefix: string, id: string, parse: (raw: unknown) => T) => {
   const cached = cache.get(id)
   if (cached !== undefined) return cached
-  const all = storedStampsOf(await settled($.store.get(STAMPS_PREFIX + id)))
-  cache.set(id, all)
-  return all
+  const value = parse(await settled($.store.get(prefix + id)))
+  cache.set(id, value)
+  return value
 }
 
-const persist = async ($: EngineInterface, id: string, all: Stamps) => {
-  await $.store.set(STAMPS_PREFIX + id, { version: STORE_VERSION, stamps: all })
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
-  await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
-    if (key.startsWith(STAMPS_PREFIX) && !kept.includes(key.slice(STAMPS_PREFIX.length))) await $.store.delete(key)
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
+
+let saving: Promise<unknown> = Promise.resolve()
 
 const stampRow = async (
   $: EngineInterface,
@@ -129,15 +131,17 @@ const stampRow = async (
 ) => {
   const at = await $.clock.now()
   const id = await settled($.session.id())
-  const prior = id === undefined ? {} : await load($, cache, id)
+  const prior = id === undefined ? {} : await load($, cache, STAMPS_PREFIX, id, storedStampsOf)
   const base: FrameStamp = isNote ? { at, texts, note: true } : { at, texts }
   const stamp: FrameStamp = isCounted ? { n: await update($, count, c => Math.max(c, lastOf(prior)) + 1), ...base } : base
   await update($, stamps, all => newest([...Object.entries(all), [uuid, stamp]]))
-  if (id !== undefined) {
-    const all = newest([...Object.entries(prior), [uuid, stamp]])
+  if (id === undefined) return
+  saving = saving.then(async () => {
+    const all = newest([...Object.entries(await load($, cache, STAMPS_PREFIX, id, storedStampsOf)), [uuid, stamp]])
     cache.set(id, all)
-    await settled(persist($, id, all))
-  }
+    await settled(persist($, STAMPS_PREFIX, id, { stamps: all }))
+  })
+  await saving
 }
 
 export const register: Register = on => {
@@ -203,7 +207,7 @@ export const register: Register = on => {
     let stamp = match(await read($, stamps))
     if (stamp === undefined) {
       const id = await settled($.session.id())
-      if (id !== undefined) stamp = match(await load($, stored, id))
+      if (id !== undefined) stamp = match(await load($, stored, STAMPS_PREFIX, id, storedStampsOf))
     }
     if (!isOwn && stamp?.note !== true) return next(e)
 

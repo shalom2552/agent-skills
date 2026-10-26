@@ -2,7 +2,7 @@ import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { clip, flatten, labelOf, targetOf } from '../hooks/register'
+import { clip, flatten, labelOf, storedListOf, targetOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -66,8 +66,8 @@ function world(on: On, entries?: Record<string, unknown>) {
 }
 
 const saved = (id: string, turn: number, file: string, status = 'ok') => ({
-  [`calls:${id}`]: [{ id: `c-${id}`, turn, tool: 'Read', target: file, isAgent: false, startedAt: 0, endedAt: 1, status }],
-  [`turns:${id}`]: [{ n: turn, prompt: `prompt ${id}` }],
+  [`calls:${id}`]: { version: 1, calls: [{ id: `c-${id}`, turn, tool: 'Read', target: file, isAgent: false, startedAt: 0, endedAt: 1, status }] },
+  [`turns:${id}`]: { version: 1, turns: [{ n: turn, prompt: `prompt ${id}` }] },
 })
 
 describe('register', () => {
@@ -233,15 +233,18 @@ describe('register', () => {
 
     await $.turn.start({ text: 'next', turnId: 't5' })
     await $.tool.call({ tool: 'Bash', command: 'ls' })
-    expect(w.store.get('calls:s1')).toHaveLength(2)
-    expect(w.store.get('turns:s1')).toEqual([
-      { n: 4, prompt: 'prompt s1' },
-      { n: 5, prompt: 'next' },
-    ])
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(2)
+    expect(w.store.get('turns:s1')).toEqual({
+      version: 1,
+      turns: [
+        { n: 4, prompt: 'prompt s1' },
+        { n: 5, prompt: 'next' },
+      ],
+    })
   })
 
   test('resume swaps to that session’s tape', async ($, on) => {
-    const w = world(on, saved('s2', 1, 'other.ts'))
+    const w = world(on, { sessions: ['s2'], ...saved('s2', 1, 'other.ts') })
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
     await $.turn.start({ text: 'mine', turnId: 't1' })
@@ -252,17 +255,28 @@ describe('register', () => {
     const text = textOf(await $.ui.render(PANE))
     expect(text).toContain('other.ts')
     expect(text).not.toContain('ls mine')
-    expect(w.store.get('calls:s1')).toHaveLength(1)
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(1)
   })
 
   test('keeps only the last five sessions', async ($, on) => {
     const old = ['a', 'b', 'c', 'd', 'e']
-    const w = world(on, { sessions: old, ...old.reduce((all, id) => ({ ...all, ...saved(id, 1, `${id}.ts`) }), {}) })
+    const w = world(on, { sessions: old, ...old.reduce((all, id) => ({ ...all, ...saved(id, 1, `${id}.ts`) }), {}), ...saved('lost', 1, 'lost.ts') })
+    on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
+    await $.turn.start({ text: 'x', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
 
     expect(w.store.get('sessions')).toEqual(['b', 'c', 'd', 'e', 's1'])
     expect(w.store.get('calls:a')).toBeUndefined()
     expect(w.store.get('turns:a')).toBeUndefined()
-    expect(w.store.get('calls:b')).toHaveLength(1)
+    expect(w.store.get('calls:lost')).toBeUndefined()
+    expect(w.store.get('turns:lost')).toBeUndefined()
+    expect(storedListOf(w.store.get('calls:b'), 'calls')).toHaveLength(1)
+  })
+
+  test('unversioned saves are not read', async ($, on) => {
+    world(on, { 'calls:s1': [{ id: 'c', turn: 1, tool: 'Read', target: 'old.ts', isAgent: false, startedAt: 0, endedAt: 1, status: 'ok' }] })
+    await $.session.start(SESSION)
+    expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
   })
 })

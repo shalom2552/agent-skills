@@ -1,7 +1,7 @@
 import type { On, RenderInput } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { clockOf, displayOf, parseOffset, unwrapPastes } from '../hooks/register'
+import { clockOf, displayOf, parseOffset, storedStampsOf, unwrapPastes } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -14,7 +14,18 @@ const ROW = (requestId: string, text: string, isExpanded = false): RenderInput<'
   props: { text, origin: { kind: 'composer' }, isExpanded },
 })
 
-function world(on: On, zone = '+0300\n') {
+function world(on: On, zone = '+0300\n', store?: Map<string, unknown>) {
+  if (store !== undefined) {
+    on('session.id', () => ({ value: 's1' }))
+    on('store.get', ($, e) => ({ value: store.get(e.key) }))
+    on('store.set', async ($, e) => {
+      if (e.key === 'sessions') for (let i = 0; i < 10; i++) await Promise.resolve()
+      store.set(e.key, e.value)
+      return { value: undefined }
+    })
+    on('store.delete', ($, e) => (store.delete(e.key), { value: undefined }))
+    on('store.keys', () => ({ value: [...store.keys()] }))
+  }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('process.run', () => ({
@@ -179,6 +190,15 @@ describe('register', () => {
     expect(textOf(await $.ui.render(ROW('u1', 'x', true)))).toBe('engine')
     const peer = ROW('p1', 'x')
     expect(textOf(await $.ui.render({ ...peer, props: { ...peer.props, origin: { kind: 'sdk' } } }))).toBe('engine')
+  })
+
+  test('prompts sent at once all reach the store', async ($, on) => {
+    const store = new Map<string, unknown>()
+    world(on, '+0300\n', store)
+    await $.session.start(SESSION)
+    await Promise.all([$.session.append(prompt('u1', 'a')), $.session.append(prompt('u2', 'b'))])
+
+    expect(Object.keys(storedStampsOf(store.get('stamps:s1'))).sort()).toEqual(['u1', 'u2'])
   })
 
   test('/clear restarts the count', async ($, on) => {

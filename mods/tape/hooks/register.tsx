@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { CoreEngineInterface, Register } from 'claude-code'
+import type { CoreEngineInterface, EngineInterface, Register } from 'claude-code'
 
 import type { TapeCall, TapeStatus, TapeTurn } from '../types'
 
@@ -8,7 +8,10 @@ const TITLE = 'Tape'
 const MAX_CALLS = 300
 const MAX_TURNS = 50
 const MAX_SESSIONS = 5
+const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
+const CALLS_PREFIX = 'calls:'
+const TURNS_PREFIX = 'turns:'
 const MAX_TARGET = 1000
 const MAX_LABEL = 16
 const INDENT = 2
@@ -93,52 +96,65 @@ const turnName = (n: number) => (n === 0 ? 'Before first turn' : `Turn ${n}`)
 const shortTool = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool)
 
 type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session'>
-type Live = { turn: number; sessionId?: string; queue: Promise<void> }
+type Live = { turn: number; sessionId?: string; queue: Promise<unknown> }
 
-const callsKey = (id: string) => `calls:${id}`
-const turnsKey = (id: string) => `turns:${id}`
-const listOf = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : [])
+const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+
+export const keptSessionsOf = (raw: unknown, id: string) =>
+  [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
+
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
+  const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
+  }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
+}
+
+export const storedListOf = <T,>(raw: unknown, field: string): T[] => {
+  if (typeof raw !== 'object' || raw === null || Reflect.get(raw, 'version') !== STORE_VERSION) return []
+  const list: unknown = Reflect.get(raw, field)
+  return Array.isArray(list) ? list : []
+}
 
 async function adopt($: Engine, live: Live, id: string) {
   live.sessionId = id
-  const savedCalls = listOf<TapeCall>(await $.store.get(callsKey(id))).map(call =>
+  const savedCalls = storedListOf<TapeCall>(await settled($.store.get(CALLS_PREFIX + id)), 'calls').map(call =>
     call.status === 'running' ? { ...call, status: 'error' as const } : call,
   )
-  const savedTurns = listOf<TapeTurn>(await $.store.get(turnsKey(id)))
+  const savedTurns = storedListOf<TapeTurn>(await settled($.store.get(TURNS_PREFIX + id)), 'turns')
   live.turn = savedTurns[savedTurns.length - 1]?.n ?? 0
   await update($, calls, () => savedCalls)
   await update($, turns, () => savedTurns)
   await update($, folds, () => ({}))
   await update($, open, () => null)
-
-  const ids = [...listOf<string>(await $.store.get(SESSIONS_KEY)).filter(one => one !== id), id]
-  for (const stale of ids.slice(0, -MAX_SESSIONS)) {
-    await $.store.delete(callsKey(stale))
-    await $.store.delete(turnsKey(stale))
-  }
-  await $.store.set(SESSIONS_KEY, ids.slice(-MAX_SESSIONS))
 }
 
 async function sync($: Engine, live: Live) {
-  const id = await $.session.id()
-  if (id !== live.sessionId) await adopt($, live, id)
+  const id = await settled($.session.id())
+  if (id !== undefined && id !== live.sessionId) await adopt($, live, id)
 }
 
-function ensure($: Engine, live: Live) {
-  live.queue = live.queue.then(() => sync($, live)).catch(() => undefined)
+function enqueue(live: Live, task: () => Promise<unknown>) {
+  live.queue = live.queue.then(task).catch(noop)
   return live.queue
 }
 
-async function persist($: Engine, key: string, value: unknown) {
-  await $.store.set(key, value).catch(() => undefined)
+function ensure($: Engine, live: Live) {
+  return enqueue(live, () => sync($, live))
 }
 
-async function saveCalls($: Engine, live: Live, list: TapeCall[]) {
-  if (live.sessionId !== undefined) await persist($, callsKey(live.sessionId), list)
+function saveCalls($: Engine, live: Live) {
+  return enqueue(live, async () => {
+    if (live.sessionId !== undefined) await persist($, CALLS_PREFIX, live.sessionId, { calls: await read($, calls) })
+  })
 }
 
-async function saveTurns($: Engine, live: Live, list: TapeTurn[]) {
-  if (live.sessionId !== undefined) await persist($, turnsKey(live.sessionId), list)
+function saveTurns($: Engine, live: Live) {
+  return enqueue(live, async () => {
+    if (live.sessionId !== undefined) await persist($, TURNS_PREFIX, live.sessionId, { turns: await read($, turns) })
+  })
 }
 
 export const register: Register = on => {
@@ -166,8 +182,8 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    await saveCalls($, live, await read($, calls))
-    await saveTurns($, live, await read($, turns))
+    await saveCalls($, live)
+    await saveTurns($, live)
     const ended = await next(e)
     if (e.reason === 'clear' || e.reason === 'resume') await ensure($, live)
     return ended
@@ -177,12 +193,13 @@ export const register: Register = on => {
     await ensure($, live)
     live.turn += 1
     const entry: TapeTurn = { n: live.turn, prompt: labelOf(e.text) }
-    await saveTurns($, live, await update($, turns, list => [...list, entry].slice(-MAX_TURNS)))
+    await update($, turns, list => [...list, entry].slice(-MAX_TURNS))
+    await saveTurns($, live)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    await saveCalls($, live, await read($, calls))
+    await saveCalls($, live)
     return next(e)
   })
 
@@ -198,7 +215,8 @@ export const register: Register = on => {
       status: 'running',
     }
     const before = (await read($, calls)).length
-    await saveCalls($, live, await update($, calls, list => [...list, call].slice(-MAX_CALLS)))
+    await update($, calls, list => [...list, call].slice(-MAX_CALLS))
+    await saveCalls($, live)
     if (before === 0 && !(await $.ui.panes()).some(pane => pane.id === PANE)) {
       await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
     }
@@ -210,11 +228,8 @@ export const register: Register = on => {
       return ran
     } finally {
       const endedAt = await $.clock.now()
-      await saveCalls(
-        $,
-        live,
-        await update($, calls, list => list.map(one => (one.id === call.id ? { ...one, status, endedAt } : one))),
-      )
+      await update($, calls, list => list.map(one => (one.id === call.id ? { ...one, status, endedAt } : one)))
+      await saveCalls($, live)
     }
   })
 

@@ -86,21 +86,21 @@ export const storedTurnsOf = (raw: unknown): BeatTurn[] => {
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
 
-const load = async ($: EngineInterface, cache: Map<string, BeatTurn[]>, id: string) => {
+const load = async <T,>($: Pick<EngineInterface, 'store'>, cache: Map<string, T>, prefix: string, id: string, parse: (raw: unknown) => T) => {
   const cached = cache.get(id)
   if (cached !== undefined) return cached
-  const list = storedTurnsOf(await settled($.store.get(TURNS_PREFIX + id)))
-  cache.set(id, list)
-  return list
+  const value = parse(await settled($.store.get(prefix + id)))
+  cache.set(id, value)
+  return value
 }
 
-const persist = async ($: EngineInterface, id: string, list: readonly BeatTurn[]) => {
-  await $.store.set(TURNS_PREFIX + id, { version: STORE_VERSION, turns: list })
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
-  await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
-    if (key.startsWith(TURNS_PREFIX) && !kept.includes(key.slice(TURNS_PREFIX.length))) await $.store.delete(key)
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
 export const unionMs = (spans: readonly (readonly [number, number])[]) => {
@@ -228,9 +228,9 @@ export const register: Register = on => {
       await update($, turns, list => [...list, turn].slice(-MAX_TURNS))
       const id = await settled($.session.id())
       if (id !== undefined) {
-        const list = [...(await load($, stored, id)), turn].slice(-MAX_TURNS)
+        const list = [...(await load($, stored, TURNS_PREFIX, id, storedTurnsOf)), turn].slice(-MAX_TURNS)
         stored.set(id, list)
-        await settled(persist($, id, list))
+        await settled(persist($, TURNS_PREFIX, id, { turns: list }))
       }
     }
     return done
@@ -242,7 +242,7 @@ export const register: Register = on => {
     let hit = match(await read($, turns))
     if (hit === undefined) {
       const id = await settled($.session.id())
-      if (id !== undefined) hit = match(await load($, stored, id))
+      if (id !== undefined) hit = match(await load($, stored, TURNS_PREFIX, id, storedTurnsOf))
     }
     const values = secondsOf(hit === undefined ? [0, 0, 0, 0] : [hit.think, hit.tools, hit.write, hit.other])
     const cells = cellsOf(values, BAR)

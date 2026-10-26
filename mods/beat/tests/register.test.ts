@@ -47,15 +47,15 @@ const costs = (...usd: number[]) => {
   })
 }
 
-type World = { usage?: () => SessionUsage; store?: Map<string, unknown>; failStore?: boolean }
+type World = { usage?: () => SessionUsage; store?: Map<string, unknown>; failStore?: boolean; maxKeys?: number }
 
-function world(on: On, script: Beat[][], { usage = costs(0.1, 0.14), store = new Map(), failStore = false }: World = {}) {
+function world(on: On, script: Beat[][], { usage = costs(0.1, 0.14), store = new Map(), failStore = false, maxKeys = Infinity }: World = {}) {
   const clock: MockClock = mock.clock(on, { now: 0 })
   on('session.usage', () => ({ value: usage() }))
   on('session.id', () => ({ value: 's1' }))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
-    if (failStore) throw new Error('disk full')
+    if (failStore || (!store.has(e.key) && store.size >= maxKeys)) throw new Error('disk full')
     store.set(e.key, e.value)
     return { value: undefined }
   })
@@ -313,6 +313,16 @@ describe('register', () => {
     expect(store.has('turns:old1')).toBe(true)
     expect(store.has('turns:s1')).toBe(true)
     expect(store.get('sessions')).toEqual([...ids.slice(1), 's1'])
+  })
+
+  test('a full store frees room before it saves', async ($, on) => {
+    const ids = Array.from({ length: 50 }, (_, i) => `old${i}`)
+    const store = new Map<string, unknown>([['sessions', ids], ...ids.map(id => [`turns:${id}`, { version: 1, turns: [TURN] }] as const)])
+    world(on, [[[text('hi'), 1_000]]], { store, maxKeys: store.size })
+    await finish($, USAGE)
+
+    expect(store.has('turns:old0')).toBe(false)
+    expect(store.has('turns:s1')).toBe(true)
   })
 
   test('a failing store keeps the live turn', async ($, on) => {

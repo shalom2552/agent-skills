@@ -72,13 +72,13 @@ export const storedDiffOf = (raw: unknown): StatuslineDiff | undefined => {
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
 
-const persist = async ($: EngineInterface, id: string, d: StatuslineDiff) => {
-  await $.store.set(DIFF_PREFIX + id, { version: STORE_VERSION, ...d })
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
-  await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
-    if (key.startsWith(DIFF_PREFIX) && !kept.includes(key.slice(DIFF_PREFIX.length))) await $.store.delete(key)
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
 const rebuilt = async ($: EngineInterface): Promise<StatuslineDiff> => {
@@ -124,7 +124,7 @@ function refreshSoon($: EngineInterface) {
 function save($: EngineInterface) {
   saving = saving.then(async () => {
     const id = await settled($.session.id())
-    if (id !== undefined) await settled(persist($, id, await read($, diff)))
+    if (id !== undefined) await settled(persist($, DIFF_PREFIX, id, await read($, diff)))
   })
   return saving
 }
