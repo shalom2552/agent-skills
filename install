@@ -231,6 +231,7 @@ declare -A COUNTS=()
 declare -A TYPE_COUNTS=()
 EMIT_TYPE=""
 EMIT_TYPES=()
+HEADING=""             # the type heading printed last
 
 emit() {
   local status="$1" label="$2" detail="${3:-}"
@@ -254,6 +255,7 @@ emit_as() {
 
 type_heading() {
   emit_as "$1"
+  HEADING="$1"
   printf '\n  %s%s%s%s\n' "$C_BOLD" "$C_BLUE" "$1" "$C_RESET"
 }
 
@@ -943,9 +945,9 @@ stale_settings() {
 }
 
 prune_settings() {
-  local root="$1" last="$2" settings="$1/settings.json" label record cur new
+  local root="$1" settings="$1/settings.json" label record cur new spec name rest dir
   while IFS=$'\t' read -r label record; do
-    [[ "$last" == settings ]] || { type_heading settings; last=settings; }
+    [[ "$HEADING" == settings ]] || type_heading settings
     if ! command -v jq >/dev/null; then
       emit blocked "$label" "jq not found"
     elif ! cur="$(settings_read "$settings")"; then
@@ -960,7 +962,84 @@ prune_settings() {
       emit removed "$label"
     fi
   done < <(stale_settings "$root")
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name rest <<<"$spec"
+    dir="$root/settings/$name"
+    [[ "$name" != settings && -d "$dir" ]] && prunes "$name" && [[ -z "$(ls -A -- "$dir")" ]] && run rmdir -- "$dir"
+  done
   return 0
+}
+
+# a copy names its source in its marker
+copy_source() {
+  local marker
+  if [[ -d "$1" ]]; then marker="$1/$MARKER"; else marker="$(sidecar_marker "$1")"; fi
+  sed -n 's/^source=//p' -- "$marker" 2>/dev/null | head -n 1
+}
+
+# prints type<TAB>path for each entry of ours whose source is gone; a link is gone once it dangles
+stale_entries() {
+  local root="$1" spec name src_rel dest_rel rest dest src
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name src_rel dest_rel rest <<<"$spec"
+    [[ "$dest_rel" != - ]] || continue
+    prunes "$name" || continue
+    declare -F "type_install_${name}" >/dev/null && continue
+    for dest in "$root/$dest_rel"/*; do
+      [[ -e "$dest" || -L "$dest" ]] || continue
+      [[ -e "$REPO_ROOT/$src_rel/${dest##*/}" ]] && continue
+      owned_by_installer "$dest" || continue
+      if [[ -L "$dest" ]]; then
+        [[ -e "$dest" ]] && continue
+      else
+        src="$(copy_source "$dest")"
+        [[ -n "$src" && -e "$src" ]] && continue
+      fi
+      printf '%s\t%s\n' "$name" "$dest"
+    done
+  done
+  return 0
+}
+
+prune_entries() {
+  local root="$1" type dest
+  while IFS=$'\t' read -r type dest; do
+    [[ "$HEADING" == "$type" ]] || type_heading "$type"
+    emit_as "$type"
+    drop_dest "$dest"
+    emit removed "${dest##*/}"
+  done < <(stale_entries "$root")
+  return 0
+}
+
+# prints each installed mod of ours the marketplace no longer lists
+stale_mods() {
+  local scope obj id list="$REPO_ROOT/.claude-plugin/marketplace.json"
+  prunes mods && [[ -f "$list" ]] && command -v claude >/dev/null && scope="$(plugin_scope)" || return 0
+  while IFS= read -r obj; do
+    [[ "$obj" =~ \"id\":\ \"([^\"@]*)@$MARKETPLACE\" ]] || continue
+    id="${BASH_REMATCH[1]}"
+    [[ "$obj" == *"\"scope\": \"$scope\""* ]] || continue
+    [[ "$scope" == user || "$obj" == *"\"projectPath\": \"$(project_path)\""* ]] || continue
+    grep -q "\"name\": *\"$id\"" -- "$list" || printf '%s\n' "$id"
+  done < <(plugins_json)
+  return 0
+}
+
+prune_mods() {
+  local scope id ids=()
+  mapfile -t ids < <(stale_mods)
+  (( ${#ids[@]} )) || return 0
+  scope="$(plugin_scope)"
+  [[ "$HEADING" == mods ]] || type_heading mods
+  emit_as mods
+  for id in "${ids[@]}"; do
+    if plugin_cmd uninstall "$id@$MARKETPLACE" --scope "$scope"; then
+      emit removed "$id"
+    else
+      emit blocked "$id" "$PLUGIN_ERR"
+    fi
+  done
 }
 
 hide_cursor() { CURSOR_HIDDEN=1; printf '\033[?25l' >&2; }
@@ -1485,14 +1564,12 @@ installed_rows() {
 
 # one heading per asset type, so the run reads the way the picker looked
 install_entries() {
-  local root="$1" row type src dest_rel meta entry dest_dir last="" why
+  local root="$1" row type src dest_rel meta entry dest_dir why
   local -A made=()
+  HEADING=""
   for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
-    if [[ "$type" != "$last" ]]; then
-      last="$type"
-      type_heading "$type"
-    fi
+    [[ "$type" == "$HEADING" ]] || type_heading "$type"
     if declare -F "type_install_${type}" >/dev/null; then
       "type_install_${type}" "$src" "$entry"
       continue
@@ -1513,7 +1590,9 @@ install_entries() {
     "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$entry"
     [[ "$LAST_STATUS" == blocked ]] || bound_install "$root" "$type" "$src" "$dest_dir/$entry"
   done
-  prune_settings "$root" "$last"
+  prune_entries "$root"
+  prune_mods
+  prune_settings "$root"
   printf '\n'
 }
 
@@ -1704,7 +1783,7 @@ main() {
   local row
   ROWS=()
   while IFS= read -r row; do ROWS+=("$row"); done < <(walk_entries)
-  if (( ${#ROWS[@]} == 0 )) && { (( DO_LIST )) || [[ -z "$(stale_settings "$(resolve_root)")" ]]; }; then
+  if (( ${#ROWS[@]} == 0 )) && { (( DO_LIST )) || [[ -z "$(stale_settings "$(resolve_root)")$(stale_entries "$(resolve_root)")" ]]; }; then
     die "no matching entries"
   fi
 
