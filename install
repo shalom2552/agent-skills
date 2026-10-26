@@ -74,8 +74,13 @@ FOREIGN=0              # a blocked entry that --force would replace
 LAST_STATUS=""         # what the last emit reported
 CLASH=""               # settings keys a fragment would overwrite, comma separated
 BOUND=""               # an entry's <stem>.settings.json, empty when it has none
+SPIN_PID=""
+SPIN_UP=0
+SPIN_DEPTH=0           # nested spin_start calls reuse the outer spinner
 
 cleanup() {
+  SPIN_DEPTH=0
+  spin_stop
   [[ -t 1 ]] && printf '\033[?25h' >&2
   [[ -n "$STAGED" ]] && rm -rf -- "$STAGED"
   if [[ -n "$BACKUP" && -e "$BACKUP" ]]; then
@@ -112,6 +117,32 @@ note()       { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
 log_error()  { printf '%sinstall:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
 die()        { log_error "$*"; exit 1; }
 die_usage()  { log_error "$*"; printf '\n' >&2; usage >&2; exit 1; }
+
+spin_start() {
+  SPIN_DEPTH=$(( SPIN_DEPTH + 1 ))
+  [[ -t 2 && "$SPIN_DEPTH" -eq 1 ]] || return 0
+  SPIN_UP=$(( MENU_DRAWN > 0 ))
+  (( SPIN_UP )) && printf '\033[A' >&2
+  (
+    frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); i=0
+    while :; do
+      printf '\r  %s%s %s%s\033[K' "$C_DIM" "${frames[i++ % 10]}" "$1" "$C_RESET" >&2
+      sleep 0.08
+    done
+  ) &
+  SPIN_PID=$!
+}
+
+spin_stop() {
+  (( SPIN_DEPTH > 0 )) && SPIN_DEPTH=$(( SPIN_DEPTH - 1 ))
+  [[ "$SPIN_DEPTH" -eq 0 && -n "$SPIN_PID" ]] || return 0
+  kill "$SPIN_PID" 2>/dev/null || true
+  wait "$SPIN_PID" 2>/dev/null || true
+  SPIN_PID=""
+  printf '\r\033[K' >&2
+  (( SPIN_UP )) && printf '\n' >&2
+  SPIN_UP=0
+}
 
 rule() {
   local width cols
@@ -455,12 +486,16 @@ fetch_source() {
     [[ "$origin" == "$REPO_URL" ]] \
       || die "$SOURCE_HOME is a checkout of ${origin:-an unknown repo}; set AGENT_SKILLS_HOME to another path"
     note "checking $SOURCE_HOME for updates"
+    spin_start "fetching"
     git -C "$SOURCE_HOME" fetch -q --depth 1 origin HEAD
+    spin_stop
     review_update
   else
     note "cloning $REPO_URL into $SOURCE_HOME"
     mkdir -p -- "$(dirname -- "$SOURCE_HOME")"
+    spin_start "cloning"
     git clone -q --depth 1 -- "$REPO_URL" "$SOURCE_HOME"
+    spin_stop
   fi
 
   has_assets "$SOURCE_HOME" || die "no assets found in $SOURCE_HOME"
@@ -624,16 +659,22 @@ plugin_scope() {
 }
 
 plugins_json() {
-  [[ -n "$PLUGINS" ]] \
-    || PLUGINS="$(claude plugin list --json 2>/dev/null | tr -d '\n' | sed 's/}[[:space:]]*,[[:space:]]*{/}\n{/g')"
+  if [[ -z "$PLUGINS" ]]; then
+    spin_start "reading installed mods"
+    PLUGINS="$(claude plugin list --json 2>/dev/null | tr -d '\n' | sed 's/}[[:space:]]*,[[:space:]]*{/}\n{/g')"
+    spin_stop
+  fi
   printf '%s\n' "$PLUGINS"
 }
 
 # sets PLUGIN_ERR to the last line claude printed when it fails
 plugin_cmd() {
-  local out
+  local out rc=0
   if (( DRY_RUN )); then dry claude plugin "$@"; return 0; fi
-  out="$(cd -- "$(project_path)" && claude plugin "$@" 2>&1)" && return 0
+  spin_start "claude plugin $1"
+  out="$(cd -- "$(project_path)" && claude plugin "$@" 2>&1)" || rc=$?
+  spin_stop
+  (( rc )) || return 0
   PLUGIN_ERR="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 || true)"
   PLUGIN_ERR="${PLUGIN_ERR##*✘ }"
   return 1
@@ -1227,6 +1268,7 @@ pick_entries() {
   MENU_TAG+=("")
   MENU_TAGC+=("")
 
+  spin_start "loading"
   for row in "${ROWS[@]}"; do
     unpack_row "$row"
     if [[ "$type" != "$last" ]]; then
@@ -1264,6 +1306,7 @@ pick_entries() {
     MENU_TAGC+=("$tagc")
     MENU_SIZE[group]=$(( MENU_SIZE[group] + 1 ))
   done
+  spin_stop
 
   for i in "${!MENU_KIND[@]}"; do          # elbow on the last child, count on the group
     if [[ "${MENU_KIND[i]}" != "group" ]]; then continue; fi
