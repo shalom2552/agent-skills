@@ -27,6 +27,10 @@ const GREEN = 'success'
 const YELLOW = 'warning'
 const RED = 'error'
 
+const MIN_BRANCH = 12
+const DROPS = ['diff', 'branch', 'effort', 'fast', '7d', 'tokens', 'model', 'ctx', 'cost', '5h']
+const FAST = ' ⚡fast'
+
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const GIT_ICON = ''
@@ -35,6 +39,26 @@ type Engine = EngineInterface
 
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
 const noop = () => undefined
+
+const widthOf = (s: string) => [...s].length
+
+export const middle = (s: string, room: number) => {
+  const chars = [...s]
+  if (chars.length <= room) return s
+  const head = Math.ceil((room - 1) / 2)
+  return `${chars.slice(0, head).join('')}…${chars.slice(chars.length - (room - 1 - head)).join('')}`
+}
+
+export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
+  let kept = [...keys]
+  for (const key of drops) {
+    if (width(kept) <= room) break
+    kept = kept.filter(k => k !== key)
+  }
+  return kept
+}
+
+const pillsWidthOf = (bodies: readonly number[]) => (bodies.length === 0 ? 0 : 2 + bodies.reduce((a, b) => a + b, 0) + 2 * (bodies.length - 1))
 
 export const human = (n: number) => {
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}M`
@@ -294,24 +318,73 @@ export const register: Register = on => {
       return [...out, <Text key="end" color={last.color}>{CAP_RIGHT}</Text>]
     }
 
-    const model =
-      s.model === undefined ? undefined : (
-        <Text>
-          <Text bold>{s.model}</Text>
-          {s.effort === undefined ? '' : ` ${s.effort}`}
-          {s.isFast ? ' ⚡fast' : ''}
-        </Text>
-      )
-    const branch = s.branch === undefined ? undefined : `${GIT_ICON} ${s.branch}${s.isDirty ? '*' : ''}`
+    const five = s.limits.find(l => l.kind === 'five_hour')
+    const seven = s.limits.find(l => l.kind === 'seven_day')
+    const shownSeven = seven === undefined || seven.percent < HOT ? undefined : seven
+    const leftOf = (l: StatuslineLimit) => (l.resetsAt === undefined ? undefined : countdown(l.resetsAt, now))
+    const limitText = (label: string, l: StatuslineLimit) => {
+      const left = leftOf(l)
+      return `${label} ${l.percent}%${left === undefined ? '' : ` ↻${left}`}`
+    }
+
+    const effortText = s.effort === undefined ? '' : ` ${s.effort}`
+    const branchText = s.branch === undefined ? '' : `${GIT_ICON} ${s.branch}${s.isDirty ? '*' : ''}`
+    const diffText = d.added > 0 || d.removed > 0 ? ` +${d.added}/-${d.removed}` : ''
+    const costText = s.cost === undefined ? '' : `$${s.cost.toFixed(2)} `
+    const tokensText = s.tokens === undefined ? '' : `${human(s.tokens)} `
+    const keys = [
+      ...(s.model === undefined ? [] : ['model']),
+      ...(s.model === undefined || effortText === '' ? [] : ['effort']),
+      ...(s.model === undefined || !s.isFast ? [] : ['fast']),
+      ...(branchText === '' ? [] : ['branch']),
+      ...(diffText === '' ? [] : ['diff']),
+      ...(costText === '' ? [] : ['cost']),
+      ...(s.percent === undefined ? [] : ['ctx']),
+      ...(s.percent === undefined || tokensText === '' ? [] : ['tokens']),
+      ...(five === undefined ? [] : ['5h']),
+      ...(shownSeven === undefined ? [] : ['7d']),
+    ]
+    const width = (kept: readonly string[], branchWidth = widthOf(branchText)) => {
+      const has = (key: string) => kept.includes(key)
+      const lims = [
+        ...(five !== undefined && has('5h') ? [widthOf(limitText('5h', five))] : []),
+        ...(shownSeven !== undefined && has('7d') ? [widthOf(limitText('7d', shownSeven))] : []),
+      ]
+      const left = pillsWidthOf([
+        ...(has('model') ? [widthOf(s.model ?? '') + (has('effort') ? widthOf(effortText) : 0) + (has('fast') ? widthOf(FAST) + 1 : 0)] : []), // ⚡ takes two cells
+        ...(has('branch') ? [branchWidth] : []),
+      ])
+      const right = pillsWidthOf([
+        ...(has('ctx') ? [(has('tokens') ? widthOf(tokensText) : 0) + 9 + widthOf(`${s.percent}%`)] : []),
+        ...(lims.length === 0 ? [] : [lims.reduce((a, b) => a + b, 0) + 3 * (lims.length - 1)]),
+      ])
+      return left + (has('diff') ? widthOf(diffText) : 0) + 1 + (has('cost') ? widthOf(costText) : 0) + right
+    }
+    const columns = e.viewport?.columns
+    const fitted = columns === undefined ? keys : dropToFit(keys, DROPS, width, columns)
+    const branchRoom = columns === undefined ? 0 : columns - width([...fitted, 'branch'], 0)
+    const dropped = DROPS.filter(k => keys.includes(k) && !fitted.includes(k))
+    const isShort = dropped.at(-1) === 'branch' && branchRoom >= MIN_BRANCH
+    const kept = isShort ? [...fitted, 'branch'] : fitted
+    const has = (key: string) => kept.includes(key)
+
+    const model = !has('model') ? undefined : (
+      <Text>
+        <Text bold>{s.model}</Text>
+        {has('effort') ? effortText : ''}
+        {has('fast') ? FAST : ''}
+      </Text>
+    )
+    const branch = !has('branch') ? undefined : isShort ? middle(branchText, branchRoom) : branchText
 
     let ctx: RenderChildren
-    if (s.percent !== undefined) {
+    if (s.percent !== undefined && has('ctx')) {
       const window = s.window ?? 0
       const barPct = window > 0 ? Math.floor((s.percent * window) / BAR_CAP) : s.percent
       const filled = Math.min(8, Math.ceil((barPct * 8) / 100))
       ctx = (
         <Text color={heatOf(Math.floor((s.percent * window) / 100))}>
-          {s.tokens === undefined ? '' : `${human(s.tokens)} `}
+          {has('tokens') ? tokensText : ''}
           {'▰'.repeat(filled)}
           <Text dimColor>{'▱'.repeat(8 - filled)}</Text>
           {' '}
@@ -321,7 +394,7 @@ export const register: Register = on => {
     }
 
     const limit = (label: string, l: StatuslineLimit) => {
-      const left = l.resetsAt === undefined ? undefined : countdown(l.resetsAt, now)
+      const left = leftOf(l)
       return (
         <Text key={label}>
           {`${label} `}
@@ -330,11 +403,9 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const five = s.limits.find(l => l.kind === 'five_hour')
-    const seven = s.limits.find(l => l.kind === 'seven_day')
     const lims = [
-      ...(five === undefined ? [] : [limit('5h', five)]),
-      ...(seven === undefined || seven.percent < HOT ? [] : [limit('7d', seven)]),
+      ...(five === undefined || !has('5h') ? [] : [limit('5h', five)]),
+      ...(shownSeven === undefined || !has('7d') ? [] : [limit('7d', shownSeven)]),
     ]
     const lim = lims.length === 0 ? undefined : lims.flatMap((l, i) => (i === 0 ? [l] : [<Text key={`dot${i}`}> · </Text>, l]))
 
@@ -346,7 +417,7 @@ export const register: Register = on => {
               { color: BLUE, body: model },
               { color: PILL_BG, body: branch },
             ])}
-            {d.added > 0 || d.removed > 0 ? (
+            {has('diff') ? (
               <Text>
                 {' '}
                 <Text color={GREEN}>{`+${d.added}`}</Text>/<Text color={RED}>{`-${d.removed}`}</Text>
@@ -355,7 +426,7 @@ export const register: Register = on => {
           </Box>
           <Box flexGrow={1} minWidth={1} />
           <Box flexDirection="row" flexShrink={0}>
-            {s.cost === undefined ? null : <Text color={GREEN} bold>{`$${s.cost.toFixed(2)} `}</Text>}
+            {has('cost') ? <Text color={GREEN} bold>{costText}</Text> : null}
             {pills('l', [
               { color: PILL_BG, body: ctx },
               { color: BLUE, body: lim },

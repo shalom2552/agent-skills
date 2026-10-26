@@ -22,6 +22,9 @@ const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
 const COUNT_ICON = ''
 const CLOCK_ICON = '\u{f0150}'
+const MAX_NAME = 16
+const TITLE_LEFT = 2
+const DROPS = ['name', 'count', 'clock']
 
 export const parseOffset = (z: string) => {
   const m = /^([+-])(\d{2})(\d{2})$/.exec(z.trim())
@@ -80,6 +83,17 @@ export const displayOf = (text: string) => {
   const hiddenLines = shown.slice(HEAD, -TAIL).split('\n').length - 1
   return { head, hiddenLines, tail }
 }
+
+export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
+  let kept = [...keys]
+  for (const key of drops) {
+    if (width(kept) <= room) break
+    kept = kept.filter(k => k !== key)
+  }
+  return kept
+}
+
+const capped = (name: string) => ([...name].length > MAX_NAME ? `${[...name].slice(0, MAX_NAME - 1).join('')}…` : name)
 
 type Stamps = Record<string, FrameStamp>
 
@@ -215,12 +229,20 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     const offset = await read($, offsetMs)
     const shown = displayOf(e.props.text)
-    const parts = [
-      ...(origin.kind === 'plugin' ? [origin.name] : []),
-      ...(stamp?.n === undefined ? [] : [`${COUNT_ICON} ${stamp.n}`]),
-      ...(stamp === undefined || offset === null ? [] : [`${CLOCK_ICON} ${clockOf(stamp.at, offset)}`]),
+    const all = [
+      ...(origin.kind === 'plugin' ? [{ key: 'name', text: capped(origin.name) }] : []),
+      ...(stamp?.n === undefined ? [] : [{ key: 'count', text: `${COUNT_ICON} ${stamp.n}` }]),
+      ...(stamp === undefined || offset === null ? [] : [{ key: 'clock', text: `${CLOCK_ICON} ${clockOf(stamp.at, offset)}` }]),
     ]
-    const title = parts.length === 0 ? undefined : parts.join(' · ')
+    const titleOf = (kept: readonly string[]) =>
+      all
+        .filter(p => kept.includes(p.key))
+        .map(p => p.text)
+        .join(' · ')
+    const keys = all.map(p => p.key)
+    const columns = e.viewport?.columns
+    const kept = columns === undefined ? keys : dropToFit(keys, DROPS, k => [...` ${titleOf(k)} `].length, columns - 2 * TITLE_LEFT)
+    const title = kept.length === 0 ? undefined : titleOf(kept)
 
     return (
       <Box flexDirection="column" marginTop={1}>
@@ -233,7 +255,7 @@ export const register: Register = on => {
           </Box>
         </Box>
         {title !== undefined && (
-          <Box position="absolute" top={0} left={2}>
+          <Box position="absolute" top={0} left={TITLE_LEFT}>
             <Text color={BORDER}> {title} </Text>
           </Box>
         )}

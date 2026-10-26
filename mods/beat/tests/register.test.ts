@@ -5,7 +5,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import {
   cellsOf,
-  fitStats,
+  dropToFit,
   formatDuration,
   formatTokens,
   keptSessionsOf,
@@ -220,35 +220,35 @@ describe('register', () => {
     expect(line).not.toContain('$')
   })
 
-  test('stats drop from the right as room runs out', () => {
-    const turn: BeatTurn = {
-      durationMs: 1_000,
-      think: 0,
-      tools: 0,
-      write: 1_000,
-      other: 0,
-      tokens: { input: 12_345, output: 1_800, cacheRead: 10_000 },
-      costUsd: 0.04,
-      contextPercent: 41,
-    }
-    const stats = statsOf(turn)
-    const keys = (room: number) => fitStats(stats, room).map(s => s.key)
-    expect(keys(pillWidthOf(stats))).toEqual(['io', 'cache', 'cost', 'context'])
-    expect(keys(pillWidthOf(stats) - 1)).toEqual(['io', 'cache', 'cost'])
-    expect(keys(pillWidthOf(stats.slice(0, 1)))).toEqual(['io'])
-    expect(keys(0)).toEqual([])
-    expect(statsOf({ ...turn, tokens: { input: 0, output: 0, cacheRead: 0 } }).map(s => s.key)).toEqual(['io', 'cost', 'context'])
+  test('dropToFit drops in the given order until it fits', () => {
+    const width = (kept: readonly string[]) => kept.join('').length
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 6)).toEqual(['a', 'bb', 'ccc'])
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 5)).toEqual(['a', 'ccc'])
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 1)).toEqual(['a'])
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 0)).toEqual([])
   })
 
-  test('the usage pill drops when both pills do not fit', async ($, on) => {
+  test('a turn with no input has no cache stat', () => {
+    const turn: BeatTurn = { durationMs: 1_000, think: 0, tools: 0, write: 1_000, other: 0, tokens: { input: 0, output: 0, cacheRead: 0 }, costUsd: 0.04, contextPercent: 41 }
+    expect(statsOf(turn).map(s => s.key)).toEqual(['io', 'cost', 'context'])
+  })
+
+  test('narrow lines drop stats by priority, then shrink the time pill', async ($, on) => {
     world(on, [[[text('hi'), 1_000]]])
     await $.turn.start({ text: 'go', turnId: 't' })
     await drain($.turn.step(STEP(0)))
     await $.turn.complete({ answer: 'hi', durationMs: 1_000, isAborted: false, turnId: 't', reason: 'answer', usage: USAGE })
 
-    const line = textOf(await $.ui.render(LINE(1_000, 30)))
-    expect(line).toContain('1s')
-    expect(line).not.toContain('↑')
+    const at = async (columns: number) => textOf(await $.ui.render(LINE(1_000, columns)))
+    const has = (line: string) => ['↑', '\uf1c0', '$', '\uf2db', '\uf0eb', '━'].filter(mark => line.includes(mark))
+    expect(has(await at(63))).toEqual(['↑', '\uf1c0', '$', '\uf2db', '\uf0eb', '━'])
+    expect(has(await at(62))).toEqual(['↑', '\uf1c0', '$', '\uf0eb', '━'])
+    expect(has(await at(55))).toEqual(['\uf1c0', '$', '\uf0eb', '━'])
+    expect(has(await at(41))).toEqual(['$', '\uf0eb', '━'])
+    expect(has(await at(34))).toEqual(['\uf0eb', '━'])
+    expect(has(await at(26))).toEqual(['━'])
+    expect(has(await at(20))).toEqual([])
+    expect(await at(20)).toContain('1s')
   })
 
   const TURN: BeatTurn = {

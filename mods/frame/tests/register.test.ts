@@ -159,6 +159,27 @@ describe('register', () => {
     expect(textOf(await $.ui.render(ROW('u2', 'next')))).toContain(' 1 ·')
   })
 
+  test('a narrow frame caps the plugin name, then drops name, number and time', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const origin = { kind: 'plugin', name: 'a-very-long-plugin-name' } as const
+    await $.session.append({ ...prompt('u1', 'Apply that.'), origin })
+    await $.session.append(prompt('u2', 'next'))
+
+    const plugin = async (columns: number) => {
+      const row = ROW('u1', 'Apply that.')
+      return textOf(await $.ui.render({ ...row, viewport: { columns, rows: 40 }, props: { ...row.props, origin } }))
+    }
+    const composer = async (columns: number) => textOf(await $.ui.render({ ...ROW('u2', 'next'), viewport: { columns, rows: 40 } }))
+    expect(await plugin(32)).toContain(' a-very-long-plu… · \u{f0150} 03:00 ')
+    expect(await plugin(31)).not.toContain('a-very')
+    expect(await plugin(31)).toContain(' \u{f0150} 03:00 ')
+    expect(await plugin(12)).not.toContain('03:00')
+    expect(await composer(19)).toContain(' 1 · \u{f0150} 03:00 ')
+    expect(await composer(18)).not.toContain(' 1')
+    expect(await composer(18)).toContain(' \u{f0150} 03:00 ')
+  })
+
   test('a note added on approve is framed with its time, no number', async ($, on) => {
     world(on)
     await $.session.start(SESSION)

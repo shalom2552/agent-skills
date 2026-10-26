@@ -13,6 +13,7 @@ const TURNS_PREFIX = 'turns:'
 const BAR = 12
 const MARGIN = 2
 const GAP = 1
+const DROPS = ['context', 'io', 'cache', 'cost', 'legend', 'bar']
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const PILL_BG = '#313244'
@@ -69,9 +70,12 @@ export const pillWidthOf = (stats: readonly Stat[]) =>
       stats.reduce((a, s) => a + s.parts.reduce((b, [icon, value]) => b + widthOf(icon + value), 0) + s.parts.length - 1, 0) +
       2 * (stats.length - 1)
 
-export const fitStats = (stats: readonly Stat[], room: number) => {
-  let kept = [...stats]
-  while (kept.length > 0 && pillWidthOf(kept) > room) kept = kept.slice(0, -1)
+export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
+  let kept = [...keys]
+  for (const key of drops) {
+    if (width(kept) <= room) break
+    kept = kept.filter(k => k !== key)
+  }
   return kept
 }
 
@@ -250,12 +254,24 @@ export const register: Register = on => {
     const time = formatDuration(e.props.durationMs)
     const legends = shown.map(p => ({ ...p, head: `  ${p.icon} `, tail: formatDuration(p.seconds * 1000) }))
 
-    const timeWidth =
-      widthOf(CAP_LEFT + time + CAP_RIGHT) +
-      (shown.length > 0 ? 1 + shown.reduce((a, p) => a + p.cells, 0) + legends.reduce((a, p) => a + widthOf(p.head + p.tail), 0) : 0)
+    const barWidth = 1 + shown.reduce((a, p) => a + p.cells, 0)
+    const legendWidth = legends.reduce((a, p) => a + widthOf(p.head + p.tail), 0)
     const all = hit === undefined ? [] : statsOf(hit)
+    const keys = [...all.map(s => s.key), ...(shown.length > 0 ? ['bar', 'legend'] : [])]
+    const width = (kept: readonly string[]) => {
+      const pill = pillWidthOf(all.filter(s => kept.includes(s.key)))
+      return (
+        widthOf(CAP_LEFT + time + CAP_RIGHT) +
+        (kept.includes('bar') ? barWidth : 0) +
+        (kept.includes('legend') ? legendWidth : 0) +
+        (pill > 0 ? GAP + pill : 0)
+      )
+    }
     const columns = e.viewport?.columns
-    const stats = columns === undefined ? all : fitStats(all, columns - 2 * MARGIN - timeWidth - GAP)
+    const kept = columns === undefined ? keys : dropToFit(keys, DROPS, width, columns - 2 * MARGIN)
+    const stats = all.filter(s => kept.includes(s.key))
+    const bars = kept.includes('bar') ? shown : []
+    const legend = kept.includes('legend') ? legends : []
 
     return (
       <Box flexDirection="row" marginTop={1} marginLeft={MARGIN} marginRight={MARGIN}>
@@ -264,13 +280,13 @@ export const register: Register = on => {
           <Text backgroundColor={PILL_BG} color={PILL_FG} bold>
             {time}
           </Text>
-          {shown.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
-          {shown.map(p => (
+          {bars.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
+          {bars.map(p => (
             <Text key={`bar-${p.part}`} backgroundColor={PILL_BG} color={p.color}>
               {'━'.repeat(p.cells)}
             </Text>
           ))}
-          {legends.map(p => (
+          {legend.map(p => (
             <Text key={`legend-${p.part}`} backgroundColor={PILL_BG}>
               <Text color={p.color}>{p.head}</Text>
               <Text color={PILL_FG}>{p.tail}</Text>
