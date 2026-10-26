@@ -50,7 +50,7 @@ describe('register', () => {
     await $.skill.prompt({ skill: 'system-fix', text: '' })
     await $.skill.prompt({ skill: 'dotconf', text: '' })
     const ui = await band()
-    expect(await ui.find({ text: 'DOTCONF' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /DOTCONF/ }))?.props.color).toBe('merged')
     expect(await ui.find({ text: 'FIX' })).toBeDefined()
     expect(await ui.find({ text: 'engine' })).toBeDefined()
   })

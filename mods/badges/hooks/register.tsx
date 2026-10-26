@@ -120,7 +120,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box gap={1}>
           {list.flatMap(skill => [
-            <Text bold inverse color="permission" key={`badge:${skill}`}>
+            <Text bold inverse color="merged" key={`badge:${skill}`}>
               {` ${BADGES[skill]} `}
             </Text>,
             ...(e.props.isWorking

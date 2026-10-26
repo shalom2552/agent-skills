@@ -20,12 +20,12 @@ const DIFF_PREFIX = 'diff:'
 const SWITCH_POLL_MS = 200
 const SWITCH_POLLS = 25
 
-const BLUE = '#89b4fa'
-const SURFACE0 = '#313244'
-const MANTLE = '#181825'
-const GREEN = '#a6e3a1'
-const YELLOW = '#f9e2af'
-const RED = '#f38ba8'
+const BLUE = 'suggestion'
+const PILL_BG = '#313244'
+const DARK = 'inverseText'
+const GREEN = 'success'
+const YELLOW = 'warning'
+const RED = 'error'
 
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
@@ -273,7 +273,7 @@ export const register: Register = on => {
       if (last === undefined) return []
       const out = shown.flatMap((seg, i) => {
         const prev = shown[i - 1]
-        const text = seg.color === BLUE ? MANTLE : BLUE
+        const text = seg.color === BLUE ? DARK : BLUE
         const joint =
           prev === undefined
             ? [<Text key={`c${i}`} color={seg.color}>{CAP_LEFT}</Text>]
@@ -344,7 +344,7 @@ export const register: Register = on => {
           <Box flexDirection="row" flexShrink={0}>
             {pills('r', [
               { color: BLUE, body: model },
-              { color: SURFACE0, body: branch },
+              { color: PILL_BG, body: branch },
             ])}
             {d.added > 0 || d.removed > 0 ? (
               <Text>
@@ -357,7 +357,7 @@ export const register: Register = on => {
           <Box flexDirection="row" flexShrink={0}>
             {s.cost === undefined ? null : <Text color={GREEN} bold>{`$${Math.round(s.cost * 100) / 100} `}</Text>}
             {pills('l', [
-              { color: SURFACE0, body: ctx },
+              { color: PILL_BG, body: ctx },
               { color: BLUE, body: lim },
             ])}
           </Box>

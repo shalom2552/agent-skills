@@ -16,15 +16,15 @@ const GAP = 1
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const PILL_BG = '#313244'
-const PILL_FG = '#cdd6f4'
-const STAT_COLOR = '#89b4fa'
+const PILL_FG = 'text'
+const STAT_COLOR = 'suggestion'
 
 type Part = 'think' | 'tools' | 'write' | 'other'
 const PARTS: readonly { part: Part; icon: string; color: string }[] = [
-  { part: 'think', icon: '', color: '#89b4fa' },
-  { part: 'tools', icon: '', color: '#f9e2af' },
-  { part: 'write', icon: '', color: '#a6e3a1' },
-  { part: 'other', icon: '\uf254', color: '#cba6f7' },
+  { part: 'think', icon: '', color: 'suggestion' },
+  { part: 'tools', icon: '', color: 'warning' },
+  { part: 'write', icon: '', color: 'success' },
+  { part: 'other', icon: '\uf254', color: 'merged' },
 ]
 
 export const formatDuration = (ms: number) => {

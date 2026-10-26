@@ -98,9 +98,9 @@ for (const surface of SURFACES) {
       const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(one => one.text === text)?.props
       expect((await colorOf('app.ts'))?.bold).toBe(true)
       expect((await colorOf('~/proj'))?.color).toBe('claude')
-      expect((await colorOf('Elsewhere'))?.color).toBe('suggestion')
-      expect((await colorOf('/opt/other/'))?.color).toBe('claude')
-      expect((await colorOf('~/.config/'))?.color).toBe('claude')
+      expect((await colorOf('Elsewhere'))?.color).toBe('ide')
+      expect((await colorOf('/opt/other/'))?.color).toBe('ide')
+      expect((await colorOf('~/.config/'))?.color).toBe('ide')
       expect((await colorOf('src/'))?.color).toBeUndefined()
       expect((await colorOf('tool.conf'))?.color).toBeUndefined()
       expect((await colorOf('x.txt'))?.color).toBeUndefined()

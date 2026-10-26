@@ -7,7 +7,7 @@ const stamps = atom({ plugin: 'frame', key: 'stamps' } as const, {})
 const count = atom({ plugin: 'frame', key: 'count' } as const, 0)
 const offsetMs = atom({ plugin: 'frame', key: 'offsetMs' } as const, null)
 
-const BORDER = '#89b4fa'
+const BORDER = 'suggestion'
 const MAX_STAMPS = 500
 const MAX_SESSIONS = 50
 const STORE_VERSION = 1

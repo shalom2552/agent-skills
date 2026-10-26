@@ -42,7 +42,7 @@ const SHELL_REASON: Record<TdiffShellReason, string> = {
   failed: 'snapshots failed',
 }
 
-const OUTSIDE_COLOR = 'suggestion'
+const OUTSIDE_COLOR = 'ide'
 const FOCUS_COLOR = 'suggestion'
 const ROOT_COLOR = 'claude'
 const EDITED = 'edited since'
@@ -191,7 +191,7 @@ export function registerPane(on: On) {
         key: 'elsewhere',
         heading: ELSEWHERE,
         headingColor: OUTSIDE_COLOR,
-        topColor: ROOT_COLOR,
+        topColor: OUTSIDE_COLOR,
         lines: visibleLines(buildTree(labelled.filter(one => !one.isUnderRoot), 'elsewhere:'), folded),
       },
     ].filter(section => section.lines.length > 0)
