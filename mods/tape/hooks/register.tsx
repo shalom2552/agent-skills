@@ -449,9 +449,9 @@ export const register: Register = on => {
             : summaryOf(shown, out)
       const report = isExpanded && spawned !== undefined ? await reportOf(spawned.id) : undefined
       const body = !isExpanded || out === undefined ? undefined : spawned !== undefined ? headOf(report ?? out.text) : tailOf(out.text)
-      const rule = (label: string) => {
-        const head = `── ${label} `
-        return head + '─'.repeat(Math.max(0, columns - width(head)))
+      const rule = (label: string, room = columns) => {
+        const head = clip(`── ${label} `, Math.max(0, room - 2))
+        return head + '─'.repeat(Math.max(0, room - width(head)))
       }
       const outColor = isFailed ? 'error' : undefined
       const more = body !== undefined && body.more > 0 ? `… ${countOf(body.more, 'more line')}` : ''
@@ -466,6 +466,16 @@ export const register: Register = on => {
         onPress: async () => {
           await update($, open, () => null)
           await $.ui.focus({ requestId: PANE, key: shown.id }).catch(noop)
+        },
+      }
+      const flip = isExpanded ? 'hide' : 'show'
+      const output = {
+        key: 'output',
+        hotkey: 'o',
+        label: flip,
+        onPress: async () => {
+          await update($, expanded, was => !was)
+          await $.ui.focus({ requestId: PANE, key: 'output' }).catch(noop)
         },
       }
       return (
@@ -485,35 +495,49 @@ export const register: Register = on => {
             <Text dimColor> · {where}</Text>
           </Text>
           {prompt.length > 0 && (
-            <Text dimColor italic wrap="truncate-end">
-              {prompt}
-            </Text>
-          )}
-          {shown.target.length > 0 && <Text dimColor>{rule(shown.tool === 'Bash' ? 'command' : 'input')}</Text>}
-          {shown.target.length > 0 &&
-            (shown.tool === 'Bash' ? (
-              <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
-            ) : (
-              <Text>{shown.target}</Text>
-            ))}
-          {out !== undefined && (
-            <Button
-              key="output"
-              hotkey="o"
-              plain
-              onPress={async () => {
-                await update($, expanded, was => !was)
-                await $.ui.focus({ requestId: PANE, key: 'output' }).catch(noop)
-              }}
-            >
-              <Text {...ink(ring === 'output', outColor, !isFailed)}>
-                {isExpanded ? '▾ ' : '▸ '}output{summary.length > 0 ? ` · ${summary}` : ''}
+            <Box paddingLeft={INDENT}>
+              <Text color="claude" wrap="truncate-end">
+                "{prompt}"
               </Text>
-            </Button>
+            </Box>
           )}
-          {body !== undefined && spawned === undefined && more.length > 0 && <Text dimColor>{more}</Text>}
-          {body !== undefined && <Text color={outColor}>{body.lines.join('\n')}</Text>}
-          {body !== undefined && spawned !== undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+          {shown.target.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text dimColor>{rule(shown.tool === 'Bash' ? 'command' : 'input')}</Text>
+              <Box paddingLeft={INDENT}>
+                {shown.tool === 'Bash' ? (
+                  <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
+                ) : (
+                  <Text>{shown.target}</Text>
+                )}
+              </Box>
+            </Box>
+          )}
+          {out !== undefined && (
+            <Box flexDirection="column" marginTop={1}>
+              <Box flexDirection="row">
+                <Text color={outColor} dimColor={!isFailed}>
+                  {rule(summary.length > 0 ? `output · ${summary}` : 'output', columns - width(` [ ${flip} ]`))}{' '}
+                </Text>
+                {ring === 'output' ? (
+                  <Button {...output}>
+                    <Text color={FOCUS_COLOR}>{flip}</Text>
+                  </Button>
+                ) : (
+                  <Button {...output} />
+                )}
+              </Box>
+              {body !== undefined && (
+                <Box flexDirection="column" paddingLeft={INDENT}>
+                  {spawned === undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+                  <Text color={outColor} dimColor={!isFailed}>
+                    {body.lines.join('\n')}
+                  </Text>
+                  {spawned !== undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+                </Box>
+              )}
+            </Box>
+          )}
         </Box>
       )
     }

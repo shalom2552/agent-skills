@@ -363,13 +363,18 @@ describe('register', () => {
     await ui.press({ key: 'c1' })
     let text = textOf(await ui.drawn())
     expect(text).toContain('── command ─')
-    expect(text).toContain('▸ output · 45 lines')
+    expect(text).toContain('── output · 45 lines ─')
     expect(text).not.toContain('L45.')
-    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.hotkey).toBe('o')
+    let toggle = await ui.find({ type: 'Button', key: 'output' })
+    expect(toggle?.props.hotkey).toBe('o')
+    expect(toggle?.props.label).toBe('show')
+    expect(toggle?.props.plain).toBeUndefined()
 
     await ui.press({ key: 'output' })
     text = textOf(await ui.drawn())
-    expect(text).toContain('▾ output · 45 lines')
+    expect(text).toContain('── output · 45 lines ─')
+    toggle = await ui.find({ type: 'Button', key: 'output' })
+    expect(toggle?.props.label).toBe('hide')
     expect(text).toContain('… 25 more lines')
     expect(text).toContain('L26.')
     expect(text).toContain('L45.')
@@ -377,8 +382,31 @@ describe('register', () => {
 
     await ui.press({ key: 'back' })
     await ui.press({ key: 'c1' })
-    expect(textOf(await ui.drawn())).toContain('▸ output')
+    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.label).toBe('show')
     await ui.unmount()
+  })
+
+  test('call details show the prompt and fill each header to the pane', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'look here', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'c1' } as never)
+    w.transcript.main = [used('c1', 'a\nb')]
+
+    for (const columns of [30, 70, 120]) {
+      const ui = await $.ui.mount({ ...MOUNT, props: { ...MOUNT.props, bodyColumns: columns } })
+      await ui.press({ key: 'c1' })
+      const texts = await ui.findAll({ type: 'Text' })
+      const prompt = texts.find(one => textOf(one) === '"look here"')
+      expect(prompt?.props.color).toBe('claude')
+      const command = texts.find(one => textOf(one).startsWith('── command'))
+      expect(Array.from(textOf(command)).length).toBe(columns)
+      const head = texts.find(one => textOf(one).startsWith('── output'))
+      expect(Array.from(`${textOf(head)}[ show ]`).length).toBe(columns)
+      await ui.press({ key: 'back' })
+      await ui.unmount()
+    }
   })
 
   test('a failed agent call reads its output from the agent', async ($, on) => {
@@ -396,8 +424,10 @@ describe('register', () => {
     const text = textOf(await ui.drawn())
     expect(text).toContain('output · exit 2')
     expect(text).toContain('boom')
-    const head = await ui.find({ type: 'Button', key: 'output' })
-    expect(JSON.stringify(head)).toContain('"color":"error"')
+    const head = (await ui.findAll({ type: 'Text' })).find(one => textOf(one).startsWith('── output'))
+    expect(head?.props.color).toBe('error')
+    const body = (await ui.findAll({ type: 'Text' })).find(one => textOf(one).includes('boom'))
+    expect(body?.props.color).toBe('error')
     await ui.unmount()
   })
 
@@ -415,7 +445,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount(MOUNT)
     await ui.press({ key: 'u1' })
-    expect(textOf(await ui.drawn())).toContain('▸ output · done · 0.0s · 1 call')
+    expect(textOf(await ui.drawn())).toContain('── output · done · 0.0s · 1 call ─')
     await ui.press({ key: 'output' })
     const text = textOf(await ui.drawn())
     expect(text).toContain('found two bugs')
