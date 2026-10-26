@@ -2,7 +2,7 @@ import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { capCalls, clip, failedNote, flatten, formatSeconds, headOf, labelOf, storedListOf, summaryOf, tailOf, targetOf } from '../hooks/register'
+import { capCalls, clip, failedNote, flatten, formatSeconds, headOf, labelOf, storedListOf, summaryOf, targetOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -162,6 +162,9 @@ describe('register', () => {
     let text = textOf(await ui.drawn())
     expect(text).toContain('▸ Turn 1')
     expect(text).toContain('1 failed')
+    const fail = (await ui.findAll({ type: 'Text' })).find(one => textOf(one) === ' · 1 call · 1 failed')
+    expect(fail?.props.dimColor).toBe(true)
+    expect(fail?.props.color).toBeUndefined()
     expect(text).not.toContain('old.ts')
     expect(text).toContain('ls new')
 
@@ -344,27 +347,27 @@ describe('register', () => {
     expect(summaryOf({ ...call('Edit'), status: 'denied' }, out('not now\nmore', true))).toBe('denied: not now')
   })
 
-  test('output keeps the tail or the head', () => {
-    const text = Array.from({ length: 25 }, (_, i) => `L${i + 1}`).join('\n')
-    expect(tailOf(text)).toEqual({ more: 5, lines: Array.from({ length: 20 }, (_, i) => `L${i + 6}`) })
-    expect(headOf(text, 2)).toEqual({ more: 23, lines: ['L1', 'L2'] })
-    expect(tailOf('a')).toEqual({ more: 0, lines: ['a'] })
+  test('output keeps the head up to the cap', () => {
+    const text = Array.from({ length: 2005 }, (_, i) => `L${i + 1}`).join('\n')
+    expect(headOf(text)).toEqual({ more: 5, lines: Array.from({ length: 2000 }, (_, i) => `L${i + 1}`) })
+    expect(headOf(text, 2)).toEqual({ more: 2003, lines: ['L1', 'L2'] })
+    expect(headOf('a')).toEqual({ more: 0, lines: ['a'] })
   })
 
-  test('a call shows its output folded, a press shows the tail', async ($, on) => {
+  test('a call shows its output folded, a press shows it whole up to the cap', async ($, on) => {
     const w = world(on)
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
     await $.turn.start({ text: 'go', turnId: 't1' })
-    await $.tool.call({ tool: 'Bash', command: 'seq 45', tool_use_id: 'c1' } as never)
-    w.transcript.main = [used('c1', Array.from({ length: 45 }, (_, i) => `L${i + 1}.`).join('\n'))]
+    await $.tool.call({ tool: 'Bash', command: 'seq 2045', tool_use_id: 'c1' } as never)
+    w.transcript.main = [used('c1', Array.from({ length: 2045 }, (_, i) => `L${i + 1}.`).join('\n'))]
 
     const ui = await $.ui.mount(MOUNT)
     await ui.press({ key: 'c1' })
     let text = textOf(await ui.drawn())
     expect(text).toContain('── command ─')
-    expect(text).toContain('── output · 45 lines ─')
-    expect(text).not.toContain('L45.')
+    expect(text).toContain('── output · 2045 lines ─')
+    expect(text).not.toContain('L1.')
     let toggle = await ui.find({ type: 'Button', key: 'output' })
     expect(toggle?.props.hotkey).toBe('o')
     expect(toggle?.props.label).toBe('show')
@@ -372,13 +375,13 @@ describe('register', () => {
 
     await ui.press({ key: 'output' })
     text = textOf(await ui.drawn())
-    expect(text).toContain('── output · 45 lines ─')
+    expect(text).toContain('── output · 2045 lines ─')
     toggle = await ui.find({ type: 'Button', key: 'output' })
     expect(toggle?.props.label).toBe('hide')
-    expect(text).toContain('… 25 more lines')
-    expect(text).toContain('L26.')
-    expect(text).toContain('L45.')
-    expect(text).not.toContain('L25.')
+    expect(text).toContain('L1.\nL2.')
+    expect(text).toContain('L2000.')
+    expect(text).not.toContain('L2001.')
+    expect(text.endsWith('… +45 more lines')).toBe(true)
 
     await ui.press({ key: 'back' })
     await ui.press({ key: 'c1' })
@@ -386,11 +389,11 @@ describe('register', () => {
     await ui.unmount()
   })
 
-  test('call details show the prompt and fill each header to the pane', async ($, on) => {
+  test('call details put the prompt in the title and fill each header to the pane', async ($, on) => {
     const w = world(on)
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
-    await $.turn.start({ text: 'look here', turnId: 't1' })
+    await $.turn.start({ text: 'look here and there', turnId: 't1' })
     await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'c1' } as never)
     w.transcript.main = [used('c1', 'a\nb')]
 
@@ -398,8 +401,11 @@ describe('register', () => {
       const ui = await $.ui.mount({ ...MOUNT, props: { ...MOUNT.props, bodyColumns: columns } })
       await ui.press({ key: 'c1' })
       const texts = await ui.findAll({ type: 'Text' })
-      const prompt = texts.find(one => textOf(one) === '"look here"')
+      const title = texts.find(one => textOf(one).startsWith('✓ Bash'))
+      expect(textOf(title)).toBe(columns === 30 ? '✓ Bash · Turn 1 · "look here…"' : '✓ Bash · Turn 1 · "look here and there"')
+      const prompt = texts.find(one => textOf(one).startsWith('"look'))
       expect(prompt?.props.color).toBe('claude')
+      expect((await ui.findAll({ type: 'Box' })).some(one => one.props.paddingLeft !== undefined)).toBe(false)
       const command = texts.find(one => textOf(one).startsWith('── command'))
       expect(Array.from(textOf(command)).length).toBe(columns)
       const head = texts.find(one => textOf(one).startsWith('── output'))

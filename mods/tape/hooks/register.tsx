@@ -24,7 +24,7 @@ const GLYPH = 2
 const MIN_TARGET_WIDTH = 10
 const MIN_COLUMNS = 24
 const MIN_PROMPT_COLUMNS = 40
-const OUTPUT_LINES = 20
+const OUTPUT_LINES = 2000
 const FOCUS_COLOR = 'suggestion'
 const TARGET_KEYS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'skill', 'description', 'prompt']
 
@@ -157,11 +157,6 @@ export const summaryOf = (call: TapeCall, out: Output) => {
   }
   if (call.tool === 'Edit' || call.tool === 'Write') return diffOf(out.result) ?? countOf(lines.length, 'line')
   return countOf(lines.length, 'line')
-}
-
-export const tailOf = (text: string, room = OUTPUT_LINES) => {
-  const lines = linesOf(text)
-  return { more: Math.max(0, lines.length - room), lines: lines.slice(-room) }
 }
 
 export const headOf = (text: string, room = OUTPUT_LINES) => {
@@ -448,17 +443,18 @@ export const register: Register = on => {
               ].join(' · ')
             : summaryOf(shown, out)
       const report = isExpanded && spawned !== undefined ? await reportOf(spawned.id) : undefined
-      const body = !isExpanded || out === undefined ? undefined : spawned !== undefined ? headOf(report ?? out.text) : tailOf(out.text)
+      const body = !isExpanded || out === undefined ? undefined : headOf(spawned !== undefined ? (report ?? out.text) : out.text)
       const rule = (label: string, room = columns) => {
         const head = clip(`── ${label} `, Math.max(0, room - 2))
         return head + '─'.repeat(Math.max(0, room - width(head)))
       }
       const outColor = isFailed ? 'error' : undefined
-      const more = body !== undefined && body.more > 0 ? `… ${countOf(body.more, 'more line')}` : ''
+      const more = body !== undefined && body.more > 0 ? `… +${countOf(body.more, 'more line')}` : ''
       const owner = agentOf(shown.agentId)
       const prompt = owner === undefined ? (known.find(t => t.n === shown.turn)?.prompt ?? '') : ''
       const where =
         owner === undefined ? turnName(shown.turn) : [nameOf(owner), owner.description].filter(Boolean).join(' · ')
+      const asked = prompt.length > 0 ? clip(prompt, columns - width(`${icon.glyph} ${shown.tool} · ${where} · ""`)) : ''
       const back = {
         key: 'back',
         hotkey: 'b',
@@ -493,24 +489,17 @@ export const register: Register = on => {
           <Text>
             <Text color={icon.color}>{icon.glyph}</Text> <Text bold>{shown.tool}</Text>
             <Text dimColor> · {where}</Text>
+            {asked.length > 0 && <Text dimColor> · </Text>}
+            {asked.length > 0 && <Text color="claude">"{asked}"</Text>}
           </Text>
-          {prompt.length > 0 && (
-            <Box paddingLeft={INDENT}>
-              <Text color="claude" wrap="truncate-end">
-                "{prompt}"
-              </Text>
-            </Box>
-          )}
           {shown.target.length > 0 && (
             <Box flexDirection="column" marginTop={1}>
               <Text dimColor>{rule(shown.tool === 'Bash' ? 'command' : 'input')}</Text>
-              <Box paddingLeft={INDENT}>
-                {shown.tool === 'Bash' ? (
-                  <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
-                ) : (
-                  <Text>{shown.target}</Text>
-                )}
-              </Box>
+              {shown.tool === 'Bash' ? (
+                <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
+              ) : (
+                <Text>{shown.target}</Text>
+              )}
             </Box>
           )}
           {out !== undefined && (
@@ -528,12 +517,11 @@ export const register: Register = on => {
                 )}
               </Box>
               {body !== undefined && (
-                <Box flexDirection="column" paddingLeft={INDENT}>
-                  {spawned === undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+                <Box flexDirection="column">
                   <Text color={outColor} dimColor={!isFailed}>
                     {body.lines.join('\n')}
                   </Text>
-                  {spawned !== undefined && more.length > 0 && <Text dimColor>{more}</Text>}
+                  {more.length > 0 && <Text dimColor>{more}</Text>}
                 </Box>
               )}
             </Box>
@@ -630,8 +618,10 @@ export const register: Register = on => {
                   <Text bold {...ink(isLit, 'claude')}>
                     {head}
                   </Text>
-                  <Text {...ink(isLit, undefined, true)}>{note}</Text>
-                  <Text {...ink(isLit, 'error')}>{fail}</Text>
+                  <Text {...ink(isLit, undefined, true)}>
+                    {note}
+                    {fail}
+                  </Text>
                   <Text italic {...ink(isLit, undefined, true)}>
                     {prompt.length > 0 ? ` ${prompt}` : ''}
                   </Text>
@@ -667,9 +657,10 @@ export const register: Register = on => {
                 </Button>
               </Box>
               <Box flexDirection="row" paddingLeft={GLYPH * 2}>
-                <Text dimColor>{info}</Text>
-                <Text color="error">{fail}</Text>
-                <Text dimColor> · {lengthOf(agent)}</Text>
+                <Text dimColor>
+                  {info}
+                  {fail} · {lengthOf(agent)}
+                </Text>
               </Box>
               {isOpen && [...own].reverse().map(renderCall(INDENT * 2))}
             </Box>
