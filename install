@@ -522,7 +522,7 @@ local_source() {
   REPO_ROOT="$dir"
 }
 
-scope_root_global()  { printf '%s\n' "${CLAUDE_HOME:-$HOME/.claude}"; }
+scope_root_global()  { printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
 scope_help_global()  { printf 'All projects (%s)\n' "$(tilde "$(scope_root_global)")"; }
 
 scope_root_project() { printf '%s/.claude\n' "$(abspath "${PROJECT_DIR:-$PWD}")"; }
@@ -1679,7 +1679,7 @@ EOF
 ENVIRONMENT
   AGENT_SKILLS_REPO     Clone URL, overriding CLONE_URL in this script
   AGENT_SKILLS_HOME     Checkout used by a piped run (default: $(tilde "$SOURCE_HOME"))
-  CLAUDE_HOME           Global assets root (default: ~/.claude)
+  CLAUDE_CONFIG_DIR     Global assets root (default: ~/.claude)
 
 EXAMPLES
   $ ./install --list
