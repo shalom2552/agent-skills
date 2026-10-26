@@ -83,7 +83,7 @@ export function registerPane(on: On) {
     if (before > 0 || (await read($, rows)).length === 0) return ran
     if (!(await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
     return ran
-  }).catch(($, e, next) => next(e))
+  })
 
   on('command.run', { command: 'tdiff' }, async $ => {
     const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)

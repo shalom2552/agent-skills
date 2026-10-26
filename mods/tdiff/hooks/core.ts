@@ -563,10 +563,10 @@ export function registerCore(on: On) {
     if (typeof raw !== 'string' || raw === '' || next.signal.aborted) return next(e)
     const cwd = await $.session.cwd().catch(() => live.root)
     return onFileCall($, next, resolve(cwd, raw), () => next(e))
-  }).catch(($, e, next) => next(e))
+  })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (next.signal.aborted) return next(e)
     return onBash($, next, typeof e.command === 'string' ? e.command : '', () => next(e))
-  }).catch(($, e, next) => next(e))
+  })
 }

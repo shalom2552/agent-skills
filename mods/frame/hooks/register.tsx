@@ -149,7 +149,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const ran = await $.process.run(['date', '+%z']).catch(() => undefined)
+    const ran = await settled($.process.run(['date', '+%z']))
     const offset = ran?.exitCode === 0 ? parseOffset(ran.stdout) : null
     await update($, offsetMs, () => offset)
     return started
