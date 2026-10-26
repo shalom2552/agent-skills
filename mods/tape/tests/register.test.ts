@@ -1,8 +1,9 @@
 import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
+import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { flatten, labelOf, targetOf, wrapText } from '../hooks/register'
-import { hiddenTextOf, textOf } from './text-of'
+import { clip, flatten, labelOf, targetOf } from '../hooks/register'
+import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
 
@@ -26,6 +27,15 @@ const PANE: RenderInput<'Pane'> = {
     scroll: { offset: 0, bodyRows: 30 },
     view: {},
   },
+}
+
+const MOUNT: MountTarget<'terminal', 'Pane'> = {
+  plugin: 'tape',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'tape',
+  viewport: { columns: 160, rows: 40, isFullscreen: true },
+  props: { ...PANE.props, isFocused: true },
 }
 
 function world(on: On, entries?: Record<string, unknown>) {
@@ -80,33 +90,42 @@ describe('register', () => {
     expect(Array.from(flatten('x'.repeat(5000), '/work'))).toHaveLength(1000)
   })
 
-  test('wrapText breaks at spaces, hard-breaks long words', () => {
-    expect(wrapText('npm run test --watch', 10)).toEqual(['npm run', 'test', '--watch'])
-    expect(wrapText('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
-    expect(wrapText('abcd efgh', 4)).toEqual(['abcd', 'efgh'])
-    expect(wrapText('', 4)).toEqual([])
-    expect(wrapText('😀😀😀', 2)).toEqual(['😀😀', '😀'])
+  test('clip cuts to the room with an ellipsis', () => {
+    expect(clip('abcdef', 10)).toBe('abcdef')
+    expect(clip('abcdef', 4)).toBe('abc…')
+    expect(clip('😀😀😀', 2)).toBe('😀…')
+    expect(clip('abc', 0)).toBe('')
   })
 
-  test('long commands show three lines and reveal the rest on hover', async ($, on) => {
+  test('a long command clips to one row, a press opens it whole, back returns', async ($, on) => {
     world(on)
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
     await $.turn.start({ text: 'go', turnId: 't1' })
     const words = Array.from({ length: 60 }, (_, i) => `w${i}`)
-    await $.tool.call({ tool: 'Bash', command: `cd /work && echo ${words.join(' ')}` })
+    await $.tool.call({ tool: 'Bash', command: `cd /work && echo ${words.join(' ')}\nls` })
 
-    const tree = await $.ui.render(PANE)
-    const text = textOf(tree)
-    expect(text).toContain('✓$')
-    expect(text).toContain('echo w0')
-    expect(text).not.toContain('/work')
-    expect(text).toMatch(/\+\d+/)
-    expect(hiddenTextOf(tree)).toContain('w59')
-    expect(hiddenTextOf(tree)).not.toContain('w0 ')
+    const ui = await $.ui.mount(MOUNT)
+    const row = (await ui.findAll({ type: 'Button' })).find(one => one.key?.startsWith('turn:') === false)
+    expect(textOf(row)).toContain('✓ $')
+    expect(textOf(row)).toContain('echo w0')
+    expect(textOf(row)).toContain('…')
+    expect(textOf(row)).not.toContain('w59')
+    expect(textOf(row)).not.toContain('/work')
+
+    await ui.press({ key: String(row?.key) })
+    const code = await ui.find({ type: 'Code' })
+    expect(code?.props.language).toBe('bash')
+    expect(String(code?.props.source)).toContain('w59\nls')
+    expect((await ui.find({ type: 'Button', key: 'back' }))?.props.hotkey).toBe('b')
+
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: String(row?.key) })).toBeDefined()
+    await ui.unmount()
   })
 
-  test('older turns collapse behind hover, failures stay counted', async ($, on) => {
+  test('older turns start folded, a press toggles, failures stay counted', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'Read' }, () => ({ result: 'x', isError: true }) as never)
     on('tool.call', () => ({ result: 'ran' }))
@@ -116,10 +135,19 @@ describe('register', () => {
     await $.turn.start({ text: 'two', turnId: 't2' })
     await $.tool.call({ tool: 'Bash', command: 'ls new' })
 
-    const tree = await $.ui.render(PANE)
-    expect(textOf(tree)).toContain('✗1')
-    expect(hiddenTextOf(tree)).toContain('old.ts')
-    expect(hiddenTextOf(tree)).not.toContain('ls new')
+    const ui = await $.ui.mount(MOUNT)
+    let text = textOf(await ui.drawn())
+    expect(text).toContain('▸ Turn 1')
+    expect(text).toContain('✗1')
+    expect(text).not.toContain('old.ts')
+    expect(text).toContain('ls new')
+
+    await ui.press({ key: 'turn:1' })
+    await ui.press({ key: 'turn:2' })
+    text = textOf(await ui.drawn())
+    expect(text).toContain('old.ts')
+    expect(text).not.toContain('ls new')
+    await ui.unmount()
   })
 
   test('turn label skips engine markup', () => {
@@ -141,6 +169,20 @@ describe('register', () => {
     expect(w.panes).toEqual([])
   })
 
+  test('the first tool call opens the pane, later ones leave it closed', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    expect(w.panes).toEqual([])
+
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+    expect(w.panes.map(p => p.id)).toEqual(['tape'])
+    await $.command.run(TAPE)
+    await $.tool.call({ tool: 'Bash', command: 'pwd' })
+    expect(w.panes).toEqual([])
+  })
+
   test('records calls per turn with status and duration', async ($, on) => {
     const w = world(on)
     on('tool.call', { tool: 'Bash' }, async () => {
@@ -159,12 +201,11 @@ describe('register', () => {
     const text = textOf(await $.ui.render(PANE))
     expect(text).toContain('Turn 2')
     expect(text).toContain('run tests')
-    expect(text).toContain('⊘Edit')
+    expect(text).toContain('⊘ Edit')
     expect(text).toContain('a.ts')
     expect(text).toContain('Turn 1')
     expect(text).toContain('fix the build')
-    expect(text).toContain('✗Read')
-    expect(text).toContain('README.md')
+    expect(text).toContain('✗1')
     expect(text.indexOf('Turn 2')).toBeLessThan(text.indexOf('Turn 1'))
   })
 
@@ -187,7 +228,7 @@ describe('register', () => {
 
     const tree = await $.ui.render(PANE)
     expect(textOf(tree)).toContain('Turn 4')
-    expect(textOf(tree)).toContain('✗Read')
+    expect(textOf(tree)).toContain('✗ Read')
     expect(textOf(tree)).toContain('kept.ts')
 
     await $.turn.start({ text: 'next', turnId: 't5' })

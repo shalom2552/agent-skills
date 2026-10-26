@@ -15,6 +15,12 @@ export type TapeTurn = { n: number; prompt: string }
 
 declare module 'claude-code' {
   interface PluginState {
-    tape: { calls: TapeCall[]; turns: TapeTurn[] }
+    tape: {
+      calls: TapeCall[]
+      turns: TapeTurn[]
+      folds: Record<string, boolean>
+      focused: string | null
+      open: string | null
+    }
   }
 }

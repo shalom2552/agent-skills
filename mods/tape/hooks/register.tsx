@@ -4,20 +4,26 @@ import type { CoreEngineInterface, Register } from 'claude-code'
 import type { TapeCall, TapeStatus, TapeTurn } from '../types'
 
 const PANE = 'tape'
+const TITLE = 'Tape'
 const MAX_CALLS = 300
 const MAX_TURNS = 50
 const MAX_SESSIONS = 5
 const SESSIONS_KEY = 'sessions'
 const MAX_TARGET = 1000
-const SHOWN_LINES = 3
 const MAX_LABEL = 16
-const ICON_WIDTH = 2
-const TIME_WIDTH = 7
+const INDENT = 2
+const GLYPH = 2
 const MIN_TARGET_WIDTH = 10
+const MIN_COLUMNS = 24
+const MIN_PROMPT_COLUMNS = 40
+const FOCUS_COLOR = 'suggestion'
 const TARGET_KEYS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'skill', 'description', 'prompt']
 
 const calls = atom({ plugin: 'tape', key: 'calls' } as const, [])
 const turns = atom({ plugin: 'tape', key: 'turns' } as const, [])
+const folds = atom({ plugin: 'tape', key: 'folds' } as const, {})
+const focused = atom({ plugin: 'tape', key: 'focused' } as const, null)
+const open = atom({ plugin: 'tape', key: 'open' } as const, null)
 
 const ICON: Record<TapeStatus, { glyph: string; color: string }> = {
   running: { glyph: '●', color: 'warning' },
@@ -60,19 +66,15 @@ export const targetOf = (input: Record<string, unknown>, cwd: string) => {
   return ''
 }
 
-export const wrapText = (text: string, width: number) => {
+const noop = () => undefined
+const width = (text: string) => Array.from(text).length
+const padStart = (text: string, room: number) => ' '.repeat(Math.max(0, room - width(text))) + text
+const padEnd = (text: string, room: number) => text + ' '.repeat(Math.max(0, room - width(text)))
+
+export const clip = (text: string, room: number) => {
   const chars = Array.from(text)
-  const room = Math.max(1, width)
-  const lines: string[] = []
-  let start = 0
-  while (chars.length - start > room) {
-    const space = chars.lastIndexOf(' ', start + room)
-    const end = space > start ? space : start + room
-    lines.push(chars.slice(start, end).join(''))
-    start = space > start ? end + 1 : end
-  }
-  if (start < chars.length) lines.push(chars.slice(start).join(''))
-  return lines
+  if (chars.length <= room) return text
+  return room <= 0 ? '' : `${chars.slice(0, room - 1).join('')}…`
 }
 
 const labelOfCall = (call: TapeCall) => {
@@ -82,6 +84,11 @@ const labelOfCall = (call: TapeCall) => {
 }
 
 export const formatSeconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`)
+
+const timeOf = (call: TapeCall) =>
+  call.endedAt !== undefined ? formatSeconds(call.endedAt - call.startedAt) : call.status === 'running' ? '…' : ''
+
+const turnName = (n: number) => (n === 0 ? 'Before first turn' : `Turn ${n}`)
 
 const shortTool = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool)
 
@@ -101,6 +108,8 @@ async function adopt($: Engine, live: Live, id: string) {
   live.turn = savedTurns[savedTurns.length - 1]?.n ?? 0
   await update($, calls, () => savedCalls)
   await update($, turns, () => savedTurns)
+  await update($, folds, () => ({}))
+  await update($, open, () => null)
 
   const ids = [...listOf<string>(await $.store.get(SESSIONS_KEY)).filter(one => one !== id), id]
   for (const stale of ids.slice(0, -MAX_SESSIONS)) {
@@ -152,7 +161,7 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Tape closed.' }
     }
-    await $.ui.open({ id: PANE, title: 'Tape' })
+    await $.ui.open({ id: PANE, title: TITLE })
     return { text: 'Tape opened.' }
   })
 
@@ -188,7 +197,11 @@ export const register: Register = on => {
       startedAt: await $.clock.now(),
       status: 'running',
     }
+    const before = (await read($, calls)).length
     await saveCalls($, live, await update($, calls, list => [...list, call].slice(-MAX_CALLS)))
+    if (before === 0 && !(await $.ui.panes()).some(pane => pane.id === PANE)) {
+      await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
+    }
 
     let status: TapeStatus = 'error'
     try {
@@ -205,10 +218,71 @@ export const register: Register = on => {
     }
   })
 
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
+    return moved
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button, Code } = $.ui.resolve(e)
     const list = await read($, calls)
     const known = await read($, turns)
+    const folded = await read($, folds)
+    const shownId = await read($, open)
+    const ring = e.props.isFocused ? await read($, focused) : null
+    const columns = Math.max(MIN_COLUMNS, e.props.bodyColumns)
+
+    const ink = (isLit: boolean, color?: string, isDim?: boolean) =>
+      isLit ? { color: FOCUS_COLOR } : { color, dimColor: isDim }
+
+    const shown = list.find(call => call.id === shownId)
+    if (shown !== undefined) {
+      const icon = ICON[shown.status]
+      const prompt = known.find(t => t.n === shown.turn)?.prompt ?? ''
+      const back = {
+        key: 'back',
+        hotkey: 'b',
+        label: 'back',
+        onPress: async () => {
+          await update($, open, () => null)
+          await $.ui.focus({ requestId: PANE, key: shown.id }).catch(noop)
+        },
+      }
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between">
+            {ring === 'back' ? (
+              <Button {...back}>
+                <Text color={FOCUS_COLOR}>back</Text>
+              </Button>
+            ) : (
+              <Button {...back} />
+            )}
+            <Text dimColor>{timeOf(shown)}</Text>
+          </Box>
+          <Text>
+            <Text color={icon.color}>{icon.glyph}</Text>{' '}
+            <Text bold>
+              {shown.isAgent ? '↳' : ''}
+              {shown.tool}
+            </Text>
+            <Text dimColor> · {turnName(shown.turn)}</Text>
+          </Text>
+          {prompt.length > 0 && (
+            <Text dimColor italic wrap="truncate-end">
+              {prompt}
+            </Text>
+          )}
+          {shown.target.length > 0 &&
+            (shown.tool === 'Bash' ? (
+              <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
+            ) : (
+              <Text>{shown.target}</Text>
+            ))}
+        </Box>
+      )
+    }
 
     if (list.length === 0) {
       return (
@@ -230,85 +304,73 @@ export const register: Register = on => {
       }
     }
 
-    const width = e.props.bodyColumns
     const latest = order[order.length - 1]
+    const labelWidth = Math.max(...list.map(call => width(labelOfCall(call)))) + 1
+    const timeWidth = Math.max(1, ...list.map(call => width(timeOf(call))))
+    const room = Math.max(MIN_TARGET_WIDTH, columns - INDENT - GLYPH - labelWidth - 1 - timeWidth)
+
+    const toggle = (n: number, isOpen: boolean) => async () => {
+      await update($, folds, now => ({ ...now, [String(n)]: !isOpen }))
+      await $.ui.focus({ requestId: PANE, key: `turn:${n}` }).catch(noop)
+    }
 
     const renderCall = (call: TapeCall) => {
       const icon = ICON[call.status]
-      const label = labelOfCall(call)
-      const labelWidth = label.length + 1
-      const room = Math.max(MIN_TARGET_WIDTH, width - ICON_WIDTH - labelWidth - TIME_WIDTH)
-      const lines = wrapText(call.target, room)
-      const shown = lines.slice(0, SHOWN_LINES)
-      const hidden = lines.slice(SHOWN_LINES)
-      const line = (text: string, i: number) => (
-        <Text key={`${call.id}-${i}`} dimColor={call.isAgent} wrap="truncate-end">
-          {text}
-        </Text>
-      )
+      const isLit = ring === call.id
+      const target = clip(call.target, room)
       return (
-        <Box key={call.id} flexDirection="row">
-          <Box width={ICON_WIDTH} flexShrink={0}>
-            <Text color={icon.color}>{icon.glyph}</Text>
-          </Box>
-          <Box width={labelWidth} flexShrink={0}>
-            <Text bold={!call.isAgent} dimColor={call.isAgent}>
-              {label}
+        <Box key={`row:${call.id}`} flexDirection="row" paddingLeft={INDENT}>
+          <Button
+            key={call.id}
+            plain
+            onPress={async () => {
+              await update($, open, () => call.id)
+              await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
+            }}
+          >
+            <Text {...ink(isLit, icon.color)}>{icon.glyph} </Text>
+            <Text bold={!call.isAgent} {...ink(isLit, undefined, call.isAgent)}>
+              {padEnd(labelOfCall(call), labelWidth)}
             </Text>
-          </Box>
-          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-            {shown.map(line)}
-            {hidden.length > 0 && (
-              <Box display="none" hover={{ display: 'flex' }} flexDirection="column">
-                {hidden.map((text, i) => line(text, SHOWN_LINES + i))}
-              </Box>
-            )}
-          </Box>
-          <Box width={TIME_WIDTH} flexShrink={0} flexDirection="column" alignItems="flex-end">
-            <Text dimColor>
-              {call.endedAt !== undefined
-                ? formatSeconds(call.endedAt - call.startedAt)
-                : call.status === 'running'
-                  ? '…'
-                  : ''}
+            <Text {...ink(isLit, undefined, call.isAgent)}>{padEnd(target, room)}</Text>
+            <Text mono {...ink(isLit, undefined, true)}>
+              {' '}
+              {padStart(timeOf(call), timeWidth)}
             </Text>
-            {hidden.length > 0 && <Text dimColor>{`+${hidden.length}`}</Text>}
-          </Box>
+          </Button>
         </Box>
       )
     }
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" width={e.props.bodyColumns}>
         {order.reverse().map(n => {
           const group = byTurn.get(n) ?? []
-          const prompt = known.find(t => t.n === n)?.prompt ?? ''
           const failed = group.filter(call => call.status === 'error' || call.status === 'denied').length
-          const isOpen = n === latest || group.some(call => call.status === 'running')
-          const rows = [...group].reverse().map(renderCall)
+          const isOpen = folded[String(n)] ?? (n === latest || group.some(call => call.status === 'running'))
+          const isLit = ring === `turn:${n}`
+          const head = turnName(n)
+          const note = ` · ${group.length} call${group.length === 1 ? '' : 's'}`
+          const fail = failed > 0 ? ` · ✗${failed}` : ''
+          const asked = known.find(t => t.n === n)?.prompt ?? ''
+          const prompt =
+            columns >= MIN_PROMPT_COLUMNS ? clip(asked, columns - GLYPH - width(head) - width(note) - width(fail) - 1) : ''
           return (
             <Box key={`turn-${n}`} flexDirection="column" marginBottom={1}>
               <Box flexDirection="row">
-                <Text color="claude" bold>
-                  {n === 0 ? 'Before first turn' : `Turn ${n}`}
-                </Text>
-                <Text dimColor> · {group.length} call{group.length === 1 ? '' : 's'}</Text>
-                {failed > 0 && <Text color="error"> · ✗{failed}</Text>}
-                {prompt.length > 0 && width >= 40 && (
-                  <Box flexGrow={1} flexShrink={1} marginLeft={1}>
-                    <Text dimColor italic wrap="truncate-end">
-                      {prompt}
-                    </Text>
-                  </Box>
-                )}
+                <Button key={`turn:${n}`} plain onPress={() => void toggle(n, isOpen)()}>
+                  <Text {...ink(isLit, undefined, true)}>{isOpen ? '▾ ' : '▸ '}</Text>
+                  <Text bold {...ink(isLit, 'claude')}>
+                    {head}
+                  </Text>
+                  <Text {...ink(isLit, undefined, true)}>{note}</Text>
+                  <Text {...ink(isLit, 'error')}>{fail}</Text>
+                  <Text italic {...ink(isLit, undefined, true)}>
+                    {prompt.length > 0 ? ` ${prompt}` : ''}
+                  </Text>
+                </Button>
               </Box>
-              {isOpen ? (
-                rows
-              ) : (
-                <Box display="none" hover={{ display: 'flex' }} flexDirection="column">
-                  {rows}
-                </Box>
-              )}
+              {isOpen && [...group].reverse().map(renderCall)}
             </Box>
           )
         })}

@@ -1,6 +1,6 @@
 {
   "name": "tape",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "/tape: a live pane of every tool call, grouped by turn, with status, target and duration.",
   "author": {
     "name": "shalom2552"
