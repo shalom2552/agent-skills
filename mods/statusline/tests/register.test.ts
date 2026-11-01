@@ -1,7 +1,7 @@
 import type { On, RenderInput, SessionMessage, SessionUsage, Settings } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { countdown, fieldOf, human, patchLinesOf, storedDiffOf } from '../hooks/register'
+import { countdown, dropToFit, fieldOf, human, middle, patchLinesOf, storedDiffOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/repo' } as const
@@ -24,23 +24,24 @@ const USAGE: SessionUsage = {
 const EDIT = { structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-line two', '+line 2'] }] }
 const CREATE = { type: 'create', structuredPatch: [], originalFile: null, content: 'line one\nline two\n' }
 
-type World = { store?: Map<string, unknown>; messages?: SessionMessage[]; id?: string; settings?: Settings; isDetached?: boolean }
+type World = { usage?: SessionUsage; branch?: string; store?: Map<string, unknown>; messages?: SessionMessage[]; id?: string; settings?: Settings; isDetached?: boolean }
 
 const SETTINGS: Settings = { effortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
 
-function world(on: On, { store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
+function world(on: On, { usage = USAGE, branch = 'main', store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
   const clock = mock.clock(on, { now: 0 })
+  const session = { id }
   const runs: string[][] = []
   on('session.cwd', () => ({ value: '/repo' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: USAGE }))
-  on('session.id', () => ({ value: id }))
+  on('session.usage', () => ({ value: usage }))
+  on('session.id', () => ({ value: session.id }))
   on('session.messages', () => ({ value: messages }))
   on('settings.read', () => ({ value: settings }))
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const detached = isDetached && e.argv.includes('symbolic-ref')
-    const stdout = e.argv.includes('symbolic-ref') ? 'main\n' : e.argv.includes('rev-parse') ? 'abc1234\n' : e.argv.includes('status') ? ' M a.ts\n' : ''
+    const stdout = e.argv.includes('symbolic-ref') ? `${branch}\n` : e.argv.includes('rev-parse') ? 'abc1234\n' : e.argv.includes('status') ? ' M a.ts\n' : ''
     return { value: { exitCode: detached ? 1 : 0, stdout: detached ? '' : stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
@@ -57,7 +58,7 @@ function world(on: On, { store = new Map(), messages = [], id = 's1', settings =
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('tool.call', ($, e) => (e.tool === 'Read' ? { result: 'text', isReadOnly: true as const } : { result: e.tool === 'Write' ? CREATE : EDIT }))
   on('ui.render', { component: 'PromptHint' }, () => ({ type: 'Text', props: {}, children: ['engine hint'] }))
-  return { store, runs, clock }
+  return { store, runs, clock, session }
 }
 
 describe('register', () => {
@@ -69,6 +70,46 @@ describe('register', () => {
     expect(countdown(3 * 86_400_000 + 5 * 3_600_000, 0)).toBe('3d')
     expect(countdown(45 * 60_000, 0)).toBe('45m')
     expect(countdown(0, 1)).toBeUndefined()
+  })
+
+  test('dropToFit drops in the given order until it fits', () => {
+    const width = (kept: readonly string[]) => kept.join('').length
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 6)).toEqual(['a', 'bb', 'ccc'])
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 5)).toEqual(['a', 'ccc'])
+    expect(dropToFit(['a', 'bb', 'ccc'], ['bb', 'ccc', 'a'], width, 0)).toEqual([])
+    expect(middle('abcdefghij', 5)).toBe('ab…ij')
+    expect(middle('abc', 5)).toBe('abc')
+  })
+
+  test('a narrow row drops diff, branch and effort first, and keeps budget info longest', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    const marks = ['+1/-1', 'main*', 'medium', '123k', 'claude-opus-5-5', '12%', '$2.51', '5h 72%']
+    const at = async (columns: number) => {
+      const row = textOf(await $.ui.render(HINT(columns)))
+      return marks.filter(mark => row.includes(mark))
+    }
+    expect(await at(77)).toEqual(marks)
+    expect(await at(76)).toEqual(marks.slice(1))
+    expect(await at(70)).toEqual(marks.slice(2))
+    expect(await at(61)).toEqual(marks.slice(3))
+    expect(await at(54)).toEqual(marks.slice(4))
+    expect(await at(49)).toEqual(marks.slice(5))
+    expect(await at(32)).toEqual(marks.slice(6))
+    expect(await at(18)).toEqual(marks.slice(7))
+  })
+
+  test('a long branch is cut in the middle before it drops', async ($, on) => {
+    world(on, { branch: 'feat/improve-and-consistency' })
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    expect(textOf(await $.ui.render(HINT(101)))).toContain('feat/improve-and-consistency*')
+    const row = textOf(await $.ui.render(HINT(80)))
+    expect(row).not.toContain('+1/-1')
+    expect(row).toContain('feat/i…stency*')
+    expect(row).toContain('medium')
+    expect(textOf(await $.ui.render(HINT(70)))).not.toContain('feat')
   })
 
   test('counts lines like the engine', () => {
@@ -96,6 +137,12 @@ describe('register', () => {
     expect(row).toContain('12%')
     expect(row).toContain('5h 72% ↻2h')
     expect(row).toContain('engine hint')
+  })
+
+  test('cost keeps two decimals', async ($, on) => {
+    world(on, { usage: { ...USAGE, cost: { usd: 2.5 } } })
+    await $.session.start(SESSION)
+    expect(textOf(await $.ui.render(HINT()))).toContain('$2.50')
   })
 
   test('adds edits and writes to the diff and saves it', async ($, on) => {
@@ -172,6 +219,21 @@ describe('register', () => {
     await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
     await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
     expect(textOf(await $.ui.render(HINT()))).not.toContain('+1/-1')
+  })
+
+  test('resume shows the resumed session total once its id is ready', async ($, on) => {
+    const { store, clock, session } = world(on, { store: new Map([['sessions', ['s2']], ['diff:s2', { version: 1, added: 281, removed: 8 }]]) })
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } })
+    expect(textOf(await $.ui.render(HINT()))).not.toContain('+1/-1')
+
+    session.id = 's2'
+    await clock.advance(200)
+    expect(textOf(await $.ui.render(HINT()))).toContain('+281/-8')
+    await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
+    expect(store.get('diff:s2')).toEqual({ version: 1, added: 282, removed: 9 })
+    expect(store.get('diff:s1')).toEqual({ version: 1, added: 1, removed: 1 })
   })
 
   test('saves land in order', async ($, on) => {

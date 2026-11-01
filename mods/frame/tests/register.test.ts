@@ -1,7 +1,8 @@
 import type { On, RenderInput } from 'claude-code'
+import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { clockOf, displayOf, parseOffset, unwrapPastes } from '../hooks/register'
+import { clockOf, displayOf, parseOffset, storedStampsOf, unwrapPastes } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -14,7 +15,18 @@ const ROW = (requestId: string, text: string, isExpanded = false): RenderInput<'
   props: { text, origin: { kind: 'composer' }, isExpanded },
 })
 
-function world(on: On, zone = '+0300\n') {
+function world(on: On, zone = '+0300\n', store?: Map<string, unknown>) {
+  if (store !== undefined) {
+    on('session.id', () => ({ value: 's1' }))
+    on('store.get', ($, e) => ({ value: store.get(e.key) }))
+    on('store.set', async ($, e) => {
+      if (e.key === 'sessions') for (let i = 0; i < 10; i++) await Promise.resolve()
+      store.set(e.key, e.value)
+      return { value: undefined }
+    })
+    on('store.delete', ($, e) => (store.delete(e.key), { value: undefined }))
+    on('store.keys', () => ({ value: [...store.keys()] }))
+  }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('process.run', () => ({
@@ -23,6 +35,15 @@ function world(on: On, zone = '+0300\n') {
   on('ui.render', { component: 'UserMessage' }, () => ({ type: 'Text', props: {}, children: ['engine'] }))
   return mock.clock(on, { now: 0 })
 }
+
+const MOUNT = (requestId: string, text: string): MountTarget<'terminal', 'UserMessage'> => ({
+  plugin: 'frame',
+  surface: 'terminal',
+  component: 'UserMessage',
+  requestId,
+  viewport: { columns: 100, rows: 40 },
+  props: { text, origin: { kind: 'composer' }, isExpanded: false },
+})
 
 const prompt = (uuid: string, text: string) => ({
   message: { type: 'user' as const, role: 'user' as const, content: [{ type: 'text' as const, text }] },
@@ -60,10 +81,21 @@ describe('register', () => {
     expect(unwrapPastes('plain')).toBe('plain')
   })
 
-  test('a long prompt shows its head and tail', () => {
-    const long = `${'a'.repeat(2_500)}${'\n'.repeat(3)}${'b'.repeat(6_000)}${'c'.repeat(2_500)}`
-    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hiddenLines: 3, tail: 'c'.repeat(2_500) })
-    expect(displayOf('short')).toEqual({ head: 'short', hiddenLines: 0, tail: '' })
+  test('a prompt over 40 lines shows its first 16 lines', () => {
+    const lines = Array.from({ length: 41 }, (_, i) => `line ${i + 1}`)
+    expect(displayOf(lines.join('\n'))).toEqual({ head: lines.slice(0, 16).join('\n'), hidden: '+25 lines' })
+    expect(displayOf(lines.slice(0, 40).join('\n'))).toEqual({ head: lines.slice(0, 40).join('\n'), hidden: '' })
+  })
+
+  test('a long prompt with few lines is cut by chars', () => {
+    const long = `${'a'.repeat(2_500)}${'\n'.repeat(3)}${'b'.repeat(48_000)}${'c'.repeat(2_500)}`
+    expect(displayOf(long)).toEqual({ head: 'a'.repeat(2_500), hidden: '+51k chars' })
+    expect(displayOf('short')).toEqual({ head: 'short', hidden: '' })
+  })
+
+  test('long lines past 40 fall back to the char cut', () => {
+    const long = Array.from({ length: 41 }, () => 'x'.repeat(1_000)).join('\n')
+    expect(displayOf(long).hidden).toBe('+39k chars')
   })
 
   test('a pasted prompt is framed without its wrapper', async ($, on) => {
@@ -148,6 +180,27 @@ describe('register', () => {
     expect(textOf(await $.ui.render(ROW('u2', 'next')))).toContain(' 1 ·')
   })
 
+  test('a narrow frame caps the plugin name, then drops name, number and time', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const origin = { kind: 'plugin', name: 'a-very-long-plugin-name' } as const
+    await $.session.append({ ...prompt('u1', 'Apply that.'), origin })
+    await $.session.append(prompt('u2', 'next'))
+
+    const plugin = async (columns: number) => {
+      const row = ROW('u1', 'Apply that.')
+      return textOf(await $.ui.render({ ...row, viewport: { columns, rows: 40 }, props: { ...row.props, origin } }))
+    }
+    const composer = async (columns: number) => textOf(await $.ui.render({ ...ROW('u2', 'next'), viewport: { columns, rows: 40 } }))
+    expect(await plugin(32)).toContain(' a-very-long-plu… · \u{f0150} 03:00 ')
+    expect(await plugin(31)).not.toContain('a-very')
+    expect(await plugin(31)).toContain(' \u{f0150} 03:00 ')
+    expect(await plugin(12)).not.toContain('03:00')
+    expect(await composer(19)).toContain(' 1 · \u{f0150} 03:00 ')
+    expect(await composer(18)).not.toContain(' 1')
+    expect(await composer(18)).toContain(' \u{f0150} 03:00 ')
+  })
+
   test('a note added on approve is framed with its time, no number', async ($, on) => {
     world(on)
     await $.session.start(SESSION)
@@ -161,7 +214,7 @@ describe('register', () => {
         ],
       },
       door: 'tool-result',
-      origin: { kind: 'tool', name: 'Bash' },
+      origin: { kind: 'tool', tool: 'Bash' },
       uuid: 'r1',
     })
 
@@ -181,6 +234,15 @@ describe('register', () => {
     expect(textOf(await $.ui.render({ ...peer, props: { ...peer.props, origin: { kind: 'sdk' } } }))).toBe('engine')
   })
 
+  test('prompts sent at once all reach the store', async ($, on) => {
+    const store = new Map<string, unknown>()
+    world(on, '+0300\n', store)
+    await $.session.start(SESSION)
+    await Promise.all([$.session.append(prompt('u1', 'a')), $.session.append(prompt('u2', 'b'))])
+
+    expect(Object.keys(storedStampsOf(store.get('stamps:s1'))).sort()).toEqual(['u1', 'u2'])
+  })
+
   test('/clear restarts the count', async ($, on) => {
     world(on)
     await $.session.start(SESSION)
@@ -189,5 +251,44 @@ describe('register', () => {
     await $.session.append(prompt('u2', 'b'))
 
     expect(textOf(await $.ui.render(ROW('u2', 'b')))).toContain('\uea6b 1 ·')
+  })
+
+  test('a cut prompt expands to the whole text and collapses again', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const long = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n')
+    await $.session.append(prompt('u1', long))
+    await $.session.append(prompt('u2', long))
+
+    const ui = await $.ui.mount(MOUNT('u1', long))
+    const other = await $.ui.mount(MOUNT('u2', long))
+    const cut = textOf(await ui.drawn())
+    expect(cut).toContain('line 16+44 lines  [ expand ]')
+    expect(cut).not.toContain('line 17')
+    expect(cut).not.toContain('…')
+    expect(await ui.find({ type: 'Button', key: 'collapse' })).toBeUndefined()
+    expect(JSON.stringify(await ui.find({ type: 'Button', key: 'expand' }))).toContain('"color":"suggestion"')
+
+    await ui.press({ key: 'expand' })
+    const open = textOf(await ui.drawn())
+    expect(open).toContain(`${long}+44 lines  [ collapse ]`)
+    expect(await ui.find({ type: 'Button', key: 'expand' })).toBeUndefined()
+    expect(textOf(await other.drawn())).toContain('+44 lines  [ expand ]')
+
+    await ui.press({ key: 'collapse' })
+    expect(textOf(await ui.drawn())).toContain('line 16+44 lines  [ expand ]')
+    expect(textOf(await ui.drawn())).not.toContain('line 17')
+    await ui.unmount()
+    await other.unmount()
+  })
+
+  test('a prompt that is not cut has no button', async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.session.append(prompt('u1', 'short'))
+
+    const ui = await $.ui.mount(MOUNT('u1', 'short'))
+    expect(await ui.findAll({ type: 'Button' })).toEqual([])
+    await ui.unmount()
   })
 })

@@ -1,5 +1,8 @@
 {
   "name": "spinner-words",
-  "version": "0.1.0",
-  "description": "Swap the spinner verbs for dev ones."
+  "version": "0.1.1",
+  "description": "Swap the spinner verbs for dev ones.",
+  "author": {
+    "name": "shalom2552"
+  }
 }

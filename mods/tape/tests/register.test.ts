@@ -2,7 +2,7 @@ import type { CommandRunInput, On, RenderInput, UiPane } from 'claude-code'
 import type { MountTarget } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { clip, flatten, labelOf, targetOf } from '../hooks/register'
+import { capCalls, clip, failedNote, flatten, formatSeconds, headOf, labelOf, storedListOf, summaryOf, targetOf } from '../hooks/register'
 import { textOf } from './text-of'
 
 const SESSION = { surface: 'terminal', isInteractive: true, cwd: '/work' } as const
@@ -41,6 +41,8 @@ const MOUNT: MountTarget<'terminal', 'Pane'> = {
 function world(on: On, entries?: Record<string, unknown>) {
   const panes: UiPane[] = []
   const session = { id: 's1' }
+  const waiting = { reason: '' }
+  const transcript: { main: unknown[]; agents: Record<string, unknown[]> } = { main: [], agents: {} }
   const clock = mock.clock(on, { now: 0 })
   const store = new Map<string, unknown>(Object.entries(entries ?? {}))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
@@ -51,10 +53,16 @@ function world(on: On, entries?: Record<string, unknown>) {
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
   on('session.id', () => ({ value: session.id }))
+  on('session.messages', ($, e) => ({
+    value: (e.agentId === undefined ? transcript.main : (transcript.agents[e.agentId] ?? { deny: 'unknown' })) as never,
+  }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('agent.spawn', ($, e) => ({ model: 'm', agentId: `ag-${e.tool_use_id}` }))
   on('ui.panes', () => ({ value: [...panes] }))
   on('ui.open', ($, e) => {
+    if (waiting.reason.length > 0) return { value: { isPlaced: false, reason: waiting.reason } }
     panes.push({ id: e.id, title: e.title ?? e.id, isShown: true, isFocused: false, isPlaced: true })
     return { value: { isPlaced: true } }
   })
@@ -62,12 +70,20 @@ function world(on: On, entries?: Record<string, unknown>) {
     panes.splice(panes.findIndex(p => p.id === e.id), 1)
     return { value: undefined }
   })
-  return { panes, clock, session, store }
+  return { panes, clock, session, store, waiting, transcript }
 }
 
+const used = (tool_use_id: string, text: string, isError?: true, result?: unknown) => ({
+  role: 'assistant',
+  text: '',
+  toolUses: [{ tool_use_id, tool: 'x', input: {}, text, isError, result }],
+})
+
+const said = (text: string) => ({ role: 'assistant', text, toolUses: [] })
+
 const saved = (id: string, turn: number, file: string, status = 'ok') => ({
-  [`calls:${id}`]: [{ id: `c-${id}`, turn, tool: 'Read', target: file, isAgent: false, startedAt: 0, endedAt: 1, status }],
-  [`turns:${id}`]: [{ n: turn, prompt: `prompt ${id}` }],
+  [`calls:${id}`]: { version: 1, calls: [{ id: `c-${id}`, turn, tool: 'Read', target: file, startedAt: 0, endedAt: 1, status }] },
+  [`turns:${id}`]: { version: 1, turns: [{ n: turn, prompt: `prompt ${id}` }] },
 })
 
 describe('register', () => {
@@ -76,6 +92,13 @@ describe('register', () => {
     expect(targetOf({ command: '\n  npm test\nmore' }, '/work')).toBe('npm test ⏎ more')
     expect(targetOf({ command: '  ', description: 'list' }, '/work')).toBe('list')
     expect(targetOf({ other: 1 }, '/work')).toBe('')
+  })
+
+  test('durations show tenths, then seconds, then minutes', () => {
+    expect(formatSeconds(1_240)).toBe('1.2s')
+    expect(formatSeconds(45_000)).toBe('45s')
+    expect(formatSeconds(65_000)).toBe('1m 5s')
+    expect(formatSeconds(3_720_000)).toBe('1h 2m')
   })
 
   test('flatten joins lines, collapses space and strips cwd', () => {
@@ -97,6 +120,48 @@ describe('register', () => {
     expect(clip('abc', 0)).toBe('')
   })
 
+  test('j and k are hidden hotkeys between the first two rows', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+
+    const ui = await $.ui.mount(MOUNT)
+    await $.tool.call({ tool: 'Bash', command: 'ls a', tool_use_id: 'c1' } as never)
+    expect((await ui.find({ type: 'Button', key: 'jk:j' }))?.props.hotkey).toBe('j')
+    expect((await ui.find({ type: 'Button', key: 'jk:k' }))?.props.hotkey).toBe('k')
+    expect((await ui.find({ type: 'Box', key: 'jk' }))?.props.display).toBe('none')
+    expect((await ui.findAll({ type: 'Button' })).map(one => one.key)).toEqual(['turn:1', 'jk:j', 'jk:k', 'c1'])
+
+    await ui.press({ key: 'turn:1' })
+    expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+    await ui.press({ key: 'turn:1' })
+    await ui.press({ key: 'c1' })
+    expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('the arrows skip the hidden j and k stops', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    on('ui.focus', () => ({}))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls a', tool_use_id: 'c1' } as never)
+
+    const ui = await $.ui.mount(MOUNT)
+    const lit = async () =>
+      (await ui.findAll({ type: 'Text' })).find(one => one.props.color === 'suggestion' && one.text.trim().length > 1)?.text.trim()
+    const arrow = (element: string) =>
+      $.ui.focus({ component: 'Pane', requestId: 'tape', plugin: 'tape', element, origin: { kind: 'person' } })
+    await arrow('turn:1')
+    await arrow('jk:j')
+    expect(await lit()).toBe('ls a')
+    await arrow('jk:k')
+    expect(await lit()).toBe('Turn 1')
+    await ui.unmount()
+  })
+
   test('a long command clips to one row, a press opens it whole, back returns', async ($, on) => {
     world(on)
     on('tool.call', () => ({ result: 'ran' }))
@@ -106,7 +171,7 @@ describe('register', () => {
     await $.tool.call({ tool: 'Bash', command: `cd /work && echo ${words.join(' ')}\nls` })
 
     const ui = await $.ui.mount(MOUNT)
-    const row = (await ui.findAll({ type: 'Button' })).find(one => one.key?.startsWith('turn:') === false)
+    const row = (await ui.findAll({ type: 'Button' })).find(one => !/^(turn|jk):/.test(one.key ?? ''))
     expect(textOf(row)).toContain('✓ $')
     expect(textOf(row)).toContain('echo w0')
     expect(textOf(row)).toContain('…')
@@ -138,7 +203,10 @@ describe('register', () => {
     const ui = await $.ui.mount(MOUNT)
     let text = textOf(await ui.drawn())
     expect(text).toContain('▸ Turn 1')
-    expect(text).toContain('✗1')
+    expect(text).toContain('1 failed')
+    const fail = (await ui.findAll({ type: 'Text' })).find(one => textOf(one) === ' · 1 call · 1 failed')
+    expect(fail?.props.dimColor).toBe(true)
+    expect(fail?.props.color).toBeUndefined()
     expect(text).not.toContain('old.ts')
     expect(text).toContain('ls new')
 
@@ -167,6 +235,14 @@ describe('register', () => {
     expect(w.panes.map(p => p.id)).toEqual(['tape'])
     expect(await $.command.run(TAPE)).toEqual({ text: 'Tape closed.' })
     expect(w.panes).toEqual([])
+  })
+
+  test('/tape says why the pane waits', async ($, on) => {
+    const w = world(on)
+    w.waiting.reason = 'too narrow'
+    await $.session.start(SESSION)
+
+    expect(await $.command.run(TAPE)).toEqual({ text: 'Tape is waiting: too narrow' })
   })
 
   test('the first tool call opens the pane, later ones leave it closed', async ($, on) => {
@@ -205,8 +281,224 @@ describe('register', () => {
     expect(text).toContain('a.ts')
     expect(text).toContain('Turn 1')
     expect(text).toContain('fix the build')
-    expect(text).toContain('✗1')
+    expect(text).toContain('1 failed')
     expect(text.indexOf('Turn 2')).toBeLessThan(text.indexOf('Turn 1'))
+  })
+
+  test('a subagent turn start adds no turn', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'spawn two', turnId: 't1' })
+    await $.turn.start({ text: 'agent prompt', turnId: 't2', agentId: 'a1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('Turn 1')
+    expect(text).not.toContain('agent prompt')
+    expect(storedListOf(w.store.get('turns:s1'), 'turns')).toEqual([{ n: 1, prompt: 'spawn two' }])
+  })
+
+  test('failures read as a word unless narrow', () => {
+    expect(failedNote(0, 70)).toBe('')
+    expect(failedNote(4, 70)).toBe(' · 4 failed')
+    expect(failedNote(4, 30)).toBe(' · ✗4')
+  })
+
+  test('agent calls have their own cap', () => {
+    const call = (id: string, agentId?: string) => ({ id, turn: 1, tool: 'Bash', target: '', agentId, startedAt: 0, status: 'ok' as const })
+    const main = Array.from({ length: 301 }, (_, i) => call(`m${i}`))
+    const kept = capCalls([call('x', 'ag'), ...main])
+    expect(kept).toHaveLength(301)
+    expect(kept[0]?.id).toBe('x')
+    expect(kept[1]?.id).toBe('m1')
+  })
+
+  test('subagents get their own section with live status and span', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'Bash', command: 'ls bad' }, () => ({ result: 'x', isError: true }) as never)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'spawn two', turnId: 't1' })
+    for (const [id, about] of [['u1', 'review A'], ['u2', 'review B']] as const) {
+      await $.agent.spawn({ prompt: about, description: about, subagentType: 'general-purpose', tool_use_id: id } as never)
+      await $.turn.start({ text: about, turnId: `t-${id}`, agentId: `ag-${id}` })
+      await $.tool.call({ tool: 'Agent', tool_use_id: id, description: about, prompt: about } as never)
+    }
+    await $.tool.call({ tool: 'Bash', command: 'ls a', agentId: 'ag-u1' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls b', agentId: 'ag-u2' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls bad', agentId: 'ag-u2' } as never)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't-u2', agentId: 'ag-u2', reason: 'answer' })
+    await $.turn.start({ text: '<task-notification>\n<task-id>ag-u2</task-id>', turnId: 't2' })
+    await $.tool.call({ tool: 'Bash', command: 'ls main' })
+
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('Turn 2 · 1 call ↩ review B')
+    expect(text).toContain('Turn 1 · 2 calls')
+    expect(text).toContain('● Agent a1 review A')
+    expect(text).toContain('✓ Agent a2 review B')
+    expect(text).toContain('── Agents · 1 running · 1 done ─')
+    expect(text).toContain('▾ ● a1 general · review A')
+    expect(text).toContain('T1→now · 1 call')
+    expect(text).toContain('ls a')
+    expect(text).toContain('▸ ✓ a2 general · review B')
+    expect(text).toContain('T1→T1 · 2 calls · 1 failed')
+    expect(text).not.toContain('ls b')
+    expect(text.indexOf('ls main')).toBeLessThan(text.indexOf('Agents'))
+  })
+
+  test('an agent call shows its agent, not the turn prompt', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'main prompt', turnId: 't1' })
+    await $.agent.spawn({ prompt: 'p', description: 'review A', subagentType: 'Explore', tool_use_id: 'u1' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls a', agentId: 'ag-u1', tool_use_id: 'c1' } as never)
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'c1' })
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('Bash · a1 Explore · review A')
+    expect(text).not.toContain('main prompt')
+    await ui.unmount()
+  })
+
+  test('agents are saved, and a running one comes back failed', async ($, on) => {
+    const agent = { id: 'ag', description: 'review A', type: 'Explore', spawnTurn: 1, startedAt: 0, status: 'running' }
+    const w = world(on, { ...saved('s1', 1, 'kept.ts'), 'agents:s1': { version: 1, agents: [agent] } })
+    await $.session.start(SESSION)
+
+    expect(textOf(await $.ui.render(PANE))).toContain('✗ a1 Explore · review A')
+    await $.agent.spawn({ prompt: 'p', description: 'review B', subagentType: 'Explore', tool_use_id: 'u2' } as never)
+    expect(storedListOf(w.store.get('agents:s1'), 'agents')).toHaveLength(2)
+  })
+
+  test('output summaries per tool', () => {
+    const call = (tool: string, status = 'ok' as const) => ({ id: 'c', turn: 1, tool, target: 'a.ts', startedAt: 0, status })
+    const out = (text: string, isError = false, result?: unknown) => ({ text, isError, result })
+    expect(summaryOf(call('Bash'), out('a\nb\n'))).toBe('2 lines')
+    expect(summaryOf(call('Bash'), out(''))).toBe('0 lines')
+    expect(summaryOf(call('Bash'), out('Exit code 1\nboom', true))).toBe('exit 1')
+    expect(summaryOf(call('Read'), out('x', true))).toBe('error')
+    expect(summaryOf(call('Read'), out('1→a', false, { file: { numLines: 142 } }))).toBe('142 lines · a.ts')
+    expect(summaryOf(call('Read'), out('1→a'))).toBe('1 line · a.ts')
+    const patch = [{ lines: [' a', '-b', '+c', '+d'] }]
+    expect(summaryOf(call('Edit'), out('ok', false, { structuredPatch: patch }))).toBe('+2 −1')
+    expect(summaryOf(call('Write'), out('ok', false, { type: 'create', structuredPatch: [], content: 'a\nb\nc' }))).toBe('+3 −0')
+    expect(summaryOf(call('Write'), out('ok'))).toBe('1 line')
+    expect(summaryOf({ ...call('Edit'), status: 'denied' }, out('not now\nmore', true))).toBe('denied: not now')
+  })
+
+  test('output keeps the head up to the cap', () => {
+    const text = Array.from({ length: 2005 }, (_, i) => `L${i + 1}`).join('\n')
+    expect(headOf(text)).toEqual({ more: 5, lines: Array.from({ length: 2000 }, (_, i) => `L${i + 1}`) })
+    expect(headOf(text, 2)).toEqual({ more: 2003, lines: ['L1', 'L2'] })
+    expect(headOf('a')).toEqual({ more: 0, lines: ['a'] })
+  })
+
+  test('a call shows its output folded, a press shows it whole up to the cap', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'seq 2045', tool_use_id: 'c1' } as never)
+    w.transcript.main = [used('c1', Array.from({ length: 2045 }, (_, i) => `L${i + 1}.`).join('\n'))]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'c1' })
+    let text = textOf(await ui.drawn())
+    expect(text).toContain('── command ─')
+    expect(text).toContain('── output · 2045 lines ─')
+    expect(text).not.toContain('L1.')
+    let toggle = await ui.find({ type: 'Button', key: 'output' })
+    expect(toggle?.props.hotkey).toBe('o')
+    expect(toggle?.props.label).toBe('show')
+    expect(toggle?.props.plain).toBeUndefined()
+
+    await ui.press({ key: 'output' })
+    text = textOf(await ui.drawn())
+    expect(text).toContain('── output · 2045 lines ─')
+    toggle = await ui.find({ type: 'Button', key: 'output' })
+    expect(toggle?.props.label).toBe('hide')
+    expect(text).toContain('L1.\nL2.')
+    expect(text).toContain('L2000.')
+    expect(text).not.toContain('L2001.')
+    expect(text.endsWith('… +45 more lines')).toBe(true)
+
+    await ui.press({ key: 'back' })
+    await ui.press({ key: 'c1' })
+    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.label).toBe('show')
+    await ui.unmount()
+  })
+
+  test('call details put the prompt in the title and fill each header to the pane', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'look here and there', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'c1' } as never)
+    w.transcript.main = [used('c1', 'a\nb')]
+
+    for (const columns of [30, 70, 120]) {
+      const ui = await $.ui.mount({ ...MOUNT, props: { ...MOUNT.props, bodyColumns: columns } })
+      await ui.press({ key: 'c1' })
+      const texts = await ui.findAll({ type: 'Text' })
+      const title = texts.find(one => textOf(one).startsWith('✓ Bash'))
+      expect(textOf(title)).toBe(columns === 30 ? '✓ Bash · Turn 1 · "look here…"' : '✓ Bash · Turn 1 · "look here and there"')
+      const prompt = texts.find(one => textOf(one).startsWith('"look'))
+      expect(prompt?.props.color).toBe('claude')
+      expect((await ui.findAll({ type: 'Box' })).some(one => one.props.paddingLeft !== undefined)).toBe(false)
+      const command = texts.find(one => textOf(one).startsWith('── command'))
+      expect(Array.from(textOf(command)).length).toBe(columns)
+      const head = texts.find(one => textOf(one).startsWith('── output'))
+      expect(Array.from(`${textOf(head)}[ show ]`).length).toBe(columns)
+      await ui.press({ key: 'back' })
+      await ui.unmount()
+    }
+  })
+
+  test('a failed agent call reads its output from the agent', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'x', isError: true }) as never)
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.turn.start({ text: 'p', turnId: 't-ag', agentId: 'ag' })
+    await $.tool.call({ tool: 'Bash', command: 'false', agentId: 'ag', tool_use_id: 'c1' } as never)
+    w.transcript.agents.ag = [used('c1', 'Exit code 2\nboom', true)]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'c1' })
+    await ui.press({ key: 'output' })
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('output · exit 2')
+    expect(text).toContain('boom')
+    const head = (await ui.findAll({ type: 'Text' })).find(one => textOf(one).startsWith('── output'))
+    expect(head?.props.color).toBe('error')
+    const body = (await ui.findAll({ type: 'Text' })).find(one => textOf(one).includes('boom'))
+    expect(body?.props.color).toBe('error')
+    await ui.unmount()
+  })
+
+  test('a spawn shows the agent summary and its report', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.agent.spawn({ prompt: 'p', description: 'review A', subagentType: 'Explore', tool_use_id: 'u1' } as never)
+    await $.tool.call({ tool: 'Agent', tool_use_id: 'u1', description: 'review A', prompt: 'p' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'ag-u1' } as never)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't-u1', agentId: 'ag-u1', reason: 'answer' })
+    w.transcript.main = [used('u1', 'Async agent launched successfully.')]
+    w.transcript.agents['ag-u1'] = [said('first'), said('found two bugs\nsecond line')]
+
+    const ui = await $.ui.mount(MOUNT)
+    await ui.press({ key: 'u1' })
+    expect(textOf(await ui.drawn())).toContain('── output · done · 0.0s · 1 call ─')
+    await ui.press({ key: 'output' })
+    const text = textOf(await ui.drawn())
+    expect(text).toContain('found two bugs')
+    expect(text).not.toContain('launched')
+    await ui.unmount()
   })
 
   test('/clear empties the tape', async ($, on) => {
@@ -221,6 +513,35 @@ describe('register', () => {
     expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
   })
 
+  test('/clear empties the tape once the new id is ready', async ($, on) => {
+    const w = world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'x', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    w.session.id = 's2'
+    await w.clock.advance(200)
+
+    expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(1)
+  })
+
+  test('resume swaps tapes once the resumed id is ready', async ($, on) => {
+    const w = world(on, { sessions: ['s2'], ...saved('s2', 1, 'other.ts') })
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'mine', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls mine' })
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's2' } })
+    w.session.id = 's2'
+    await w.clock.advance(200)
+
+    const text = textOf(await $.ui.render(PANE))
+    expect(text).toContain('other.ts')
+    expect(text).not.toContain('ls mine')
+  })
+
   test('calls are saved and come back after a restart', async ($, on) => {
     const w = world(on, saved('s1', 4, 'kept.ts', 'running'))
     on('tool.call', () => ({ result: 'ran' }))
@@ -233,15 +554,18 @@ describe('register', () => {
 
     await $.turn.start({ text: 'next', turnId: 't5' })
     await $.tool.call({ tool: 'Bash', command: 'ls' })
-    expect(w.store.get('calls:s1')).toHaveLength(2)
-    expect(w.store.get('turns:s1')).toEqual([
-      { n: 4, prompt: 'prompt s1' },
-      { n: 5, prompt: 'next' },
-    ])
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(2)
+    expect(w.store.get('turns:s1')).toEqual({
+      version: 1,
+      turns: [
+        { n: 4, prompt: 'prompt s1' },
+        { n: 5, prompt: 'next' },
+      ],
+    })
   })
 
   test('resume swaps to that session’s tape', async ($, on) => {
-    const w = world(on, saved('s2', 1, 'other.ts'))
+    const w = world(on, { sessions: ['s2'], ...saved('s2', 1, 'other.ts') })
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
     await $.turn.start({ text: 'mine', turnId: 't1' })
@@ -252,17 +576,28 @@ describe('register', () => {
     const text = textOf(await $.ui.render(PANE))
     expect(text).toContain('other.ts')
     expect(text).not.toContain('ls mine')
-    expect(w.store.get('calls:s1')).toHaveLength(1)
+    expect(storedListOf(w.store.get('calls:s1'), 'calls')).toHaveLength(1)
   })
 
   test('keeps only the last five sessions', async ($, on) => {
     const old = ['a', 'b', 'c', 'd', 'e']
-    const w = world(on, { sessions: old, ...old.reduce((all, id) => ({ ...all, ...saved(id, 1, `${id}.ts`) }), {}) })
+    const w = world(on, { sessions: old, ...old.reduce((all, id) => ({ ...all, ...saved(id, 1, `${id}.ts`) }), {}), ...saved('lost', 1, 'lost.ts') })
+    on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
+    await $.turn.start({ text: 'x', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls' })
 
     expect(w.store.get('sessions')).toEqual(['b', 'c', 'd', 'e', 's1'])
     expect(w.store.get('calls:a')).toBeUndefined()
     expect(w.store.get('turns:a')).toBeUndefined()
-    expect(w.store.get('calls:b')).toHaveLength(1)
+    expect(w.store.get('calls:lost')).toBeUndefined()
+    expect(w.store.get('turns:lost')).toBeUndefined()
+    expect(storedListOf(w.store.get('calls:b'), 'calls')).toHaveLength(1)
+  })
+
+  test('unversioned saves are not read', async ($, on) => {
+    world(on, { 'calls:s1': [{ id: 'c', turn: 1, tool: 'Read', target: 'old.ts', startedAt: 0, endedAt: 1, status: 'ok' }] })
+    await $.session.start(SESSION)
+    expect(textOf(await $.ui.render(PANE))).toContain('No tool calls yet.')
   })
 })

@@ -17,19 +17,48 @@ const MAX_SESSIONS = 50
 const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
 const DIFF_PREFIX = 'diff:'
+const SWITCH_POLL_MS = 200
+const SWITCH_POLLS = 25
 
-const BLUE = '#89b4fa'
-const SURFACE0 = '#313244'
-const MANTLE = '#181825'
-const GREEN = '#a6e3a1'
-const YELLOW = '#f9e2af'
-const RED = '#f38ba8'
+const BLUE = 'suggestion'
+const PILL_BG = '#313244'
+const DARK = 'inverseText'
+const GREEN = 'success'
+const YELLOW = 'warning'
+const RED = 'error'
+
+const MIN_BRANCH = 12
+const DROPS = ['diff', 'branch', 'effort', 'fast', '7d', 'tokens', 'model', 'ctx', 'cost', '5h']
+const FAST = ' ⚡fast'
 
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const GIT_ICON = ''
 
+type Engine = EngineInterface
+
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+const noop = () => undefined
+
+const widthOf = (s: string) => [...s].length
+
+export const middle = (s: string, room: number) => {
+  const chars = [...s]
+  if (chars.length <= room) return s
+  const head = Math.ceil((room - 1) / 2)
+  return `${chars.slice(0, head).join('')}…${chars.slice(chars.length - (room - 1 - head)).join('')}`
+}
+
+export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
+  let kept = [...keys]
+  for (const key of drops) {
+    if (width(kept) <= room) break
+    kept = kept.filter(k => k !== key)
+  }
+  return kept
+}
+
+const pillsWidthOf = (bodies: readonly number[]) => (bodies.length === 0 ? 0 : 2 + bodies.reduce((a, b) => a + b, 0) + 2 * (bodies.length - 1))
 
 export const human = (n: number) => {
   if (n >= 1_000_000) return `${Math.floor(n / 1_000_000)}M`
@@ -72,13 +101,13 @@ export const storedDiffOf = (raw: unknown): StatuslineDiff | undefined => {
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
 
-const persist = async ($: EngineInterface, id: string, d: StatuslineDiff) => {
-  await $.store.set(DIFF_PREFIX + id, { version: STORE_VERSION, ...d })
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
-  await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
-    if (key.startsWith(DIFF_PREFIX) && !kept.includes(key.slice(DIFF_PREFIX.length))) await $.store.delete(key)
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
 const rebuilt = async ($: EngineInterface): Promise<StatuslineDiff> => {
@@ -105,6 +134,7 @@ let poll: Timer | undefined
 let refreshing: Promise<void> | undefined
 let isStale = false
 let saving: Promise<unknown> = Promise.resolve()
+let sessionId: string | undefined
 
 function refreshSoon($: EngineInterface) {
   isStale = true
@@ -124,9 +154,40 @@ function refreshSoon($: EngineInterface) {
 function save($: EngineInterface) {
   saving = saving.then(async () => {
     const id = await settled($.session.id())
-    if (id !== undefined) await settled(persist($, id, await read($, diff)))
+    if (id !== undefined) await settled(persist($, DIFF_PREFIX, id, await read($, diff)))
   })
   return saving
+}
+
+async function restore($: Engine) {
+  const id = await settled($.session.id())
+  if (id === undefined || id === sessionId) return
+  sessionId = id
+  const before = await read($, diff)
+  const stored = storedDiffOf(await settled($.store.get(DIFF_PREFIX + id)))
+  const base = stored ?? (await rebuilt($))
+  const now = await update($, diff, d => ({ added: base.added + d.added - before.added, removed: base.removed + d.removed - before.removed }))
+  if (stored === undefined) await settled(persist($, DIFF_PREFIX, id, now))
+}
+
+function ensure($: Engine) {
+  saving = saving.then(() => restore($)).catch(noop)
+  return saving
+}
+
+function followSwitch($: Engine, endedId: string) {
+  let polls = 0
+  const timer = $.clock.every(SWITCH_POLL_MS, () => {
+    polls += 1
+    void $.session
+      .id()
+      .then(async id => {
+        if (id === endedId && polls < SWITCH_POLLS) return
+        timer.cancel()
+        if (id !== endedId) await ensure($)
+      })
+      .catch(noop)
+  })
 }
 
 async function refresh($: EngineInterface) {
@@ -168,14 +229,7 @@ async function refresh($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const id = await settled($.session.id())
-    if (id !== undefined) {
-      const before = await read($, diff)
-      const stored = storedDiffOf(await settled($.store.get(DIFF_PREFIX + id)))
-      const base = stored ?? (await rebuilt($))
-      await update($, diff, d => ({ added: base.added + d.added - before.added, removed: base.removed + d.removed - before.removed }))
-      if (stored === undefined) await save($)
-    }
+    await ensure($)
     await refreshSoon($)
     poll?.cancel()
     poll = $.clock.every(POLL_MS, () => void refreshSoon($))
@@ -196,7 +250,12 @@ export const register: Register = on => {
       stepEffort = undefined
       await update($, diff, () => NO_DIFF)
     }
-    return next(e)
+    const ended = await next(e)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ensure($)
+      if (sessionId === e.sessionId) followSwitch($, e.sessionId)
+    }
+    return ended
   })
 
   on('tool.call', async ($, e, next) => {
@@ -238,7 +297,7 @@ export const register: Register = on => {
       if (last === undefined) return []
       const out = shown.flatMap((seg, i) => {
         const prev = shown[i - 1]
-        const text = seg.color === BLUE ? MANTLE : BLUE
+        const text = seg.color === BLUE ? DARK : BLUE
         const joint =
           prev === undefined
             ? [<Text key={`c${i}`} color={seg.color}>{CAP_LEFT}</Text>]
@@ -259,24 +318,73 @@ export const register: Register = on => {
       return [...out, <Text key="end" color={last.color}>{CAP_RIGHT}</Text>]
     }
 
-    const model =
-      s.model === undefined ? undefined : (
-        <Text>
-          <Text bold>{s.model}</Text>
-          {s.effort === undefined ? '' : ` ${s.effort}`}
-          {s.isFast ? ' ⚡fast' : ''}
-        </Text>
-      )
-    const branch = s.branch === undefined ? undefined : `${GIT_ICON} ${s.branch}${s.isDirty ? '*' : ''}`
+    const five = s.limits.find(l => l.kind === 'five_hour')
+    const seven = s.limits.find(l => l.kind === 'seven_day')
+    const shownSeven = seven === undefined || seven.percent < HOT ? undefined : seven
+    const leftOf = (l: StatuslineLimit) => (l.resetsAt === undefined ? undefined : countdown(l.resetsAt, now))
+    const limitText = (label: string, l: StatuslineLimit) => {
+      const left = leftOf(l)
+      return `${label} ${l.percent}%${left === undefined ? '' : ` ↻${left}`}`
+    }
+
+    const effortText = s.effort === undefined ? '' : ` ${s.effort}`
+    const branchText = s.branch === undefined ? '' : `${GIT_ICON} ${s.branch}${s.isDirty ? '*' : ''}`
+    const diffText = d.added > 0 || d.removed > 0 ? ` +${d.added}/-${d.removed}` : ''
+    const costText = s.cost === undefined ? '' : `$${s.cost.toFixed(2)} `
+    const tokensText = s.tokens === undefined ? '' : `${human(s.tokens)} `
+    const keys = [
+      ...(s.model === undefined ? [] : ['model']),
+      ...(s.model === undefined || effortText === '' ? [] : ['effort']),
+      ...(s.model === undefined || !s.isFast ? [] : ['fast']),
+      ...(branchText === '' ? [] : ['branch']),
+      ...(diffText === '' ? [] : ['diff']),
+      ...(costText === '' ? [] : ['cost']),
+      ...(s.percent === undefined ? [] : ['ctx']),
+      ...(s.percent === undefined || tokensText === '' ? [] : ['tokens']),
+      ...(five === undefined ? [] : ['5h']),
+      ...(shownSeven === undefined ? [] : ['7d']),
+    ]
+    const width = (kept: readonly string[], branchWidth = widthOf(branchText)) => {
+      const has = (key: string) => kept.includes(key)
+      const lims = [
+        ...(five !== undefined && has('5h') ? [widthOf(limitText('5h', five))] : []),
+        ...(shownSeven !== undefined && has('7d') ? [widthOf(limitText('7d', shownSeven))] : []),
+      ]
+      const left = pillsWidthOf([
+        ...(has('model') ? [widthOf(s.model ?? '') + (has('effort') ? widthOf(effortText) : 0) + (has('fast') ? widthOf(FAST) + 1 : 0)] : []), // ⚡ takes two cells
+        ...(has('branch') ? [branchWidth] : []),
+      ])
+      const right = pillsWidthOf([
+        ...(has('ctx') ? [(has('tokens') ? widthOf(tokensText) : 0) + 9 + widthOf(`${s.percent}%`)] : []),
+        ...(lims.length === 0 ? [] : [lims.reduce((a, b) => a + b, 0) + 3 * (lims.length - 1)]),
+      ])
+      return left + (has('diff') ? widthOf(diffText) : 0) + 1 + (has('cost') ? widthOf(costText) : 0) + right
+    }
+    const columns = e.viewport?.columns
+    const fitted = columns === undefined ? keys : dropToFit(keys, DROPS, width, columns)
+    const branchRoom = columns === undefined ? 0 : columns - width([...fitted, 'branch'], 0)
+    const dropped = DROPS.filter(k => keys.includes(k) && !fitted.includes(k))
+    const isShort = dropped.at(-1) === 'branch' && branchRoom >= MIN_BRANCH
+    const kept = isShort ? [...fitted, 'branch'] : fitted
+    const has = (key: string) => kept.includes(key)
+
+    const model = !has('model') ? undefined : (
+      <Text>
+        <Text bold>{s.model}</Text>
+        {has('effort') ? effortText : ''}
+        {has('fast') ? FAST : ''}
+      </Text>
+    )
+    const branch = !has('branch') ? undefined : isShort ? middle(branchText, branchRoom) : branchText
 
     let ctx: RenderChildren
-    if (s.percent !== undefined) {
+    if (s.percent !== undefined && has('ctx')) {
       const window = s.window ?? 0
       const barPct = window > 0 ? Math.floor((s.percent * window) / BAR_CAP) : s.percent
       const filled = Math.min(8, Math.ceil((barPct * 8) / 100))
       ctx = (
         <Text color={heatOf(Math.floor((s.percent * window) / 100))}>
-          {s.tokens === undefined ? '' : `${human(s.tokens)} `}
+          {has('tokens') ? tokensText : ''}
           {'▰'.repeat(filled)}
           <Text dimColor>{'▱'.repeat(8 - filled)}</Text>
           {' '}
@@ -286,7 +394,7 @@ export const register: Register = on => {
     }
 
     const limit = (label: string, l: StatuslineLimit) => {
-      const left = l.resetsAt === undefined ? undefined : countdown(l.resetsAt, now)
+      const left = leftOf(l)
       return (
         <Text key={label}>
           {`${label} `}
@@ -295,11 +403,9 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const five = s.limits.find(l => l.kind === 'five_hour')
-    const seven = s.limits.find(l => l.kind === 'seven_day')
     const lims = [
-      ...(five === undefined ? [] : [limit('5h', five)]),
-      ...(seven === undefined || seven.percent < HOT ? [] : [limit('7d', seven)]),
+      ...(five === undefined || !has('5h') ? [] : [limit('5h', five)]),
+      ...(shownSeven === undefined || !has('7d') ? [] : [limit('7d', shownSeven)]),
     ]
     const lim = lims.length === 0 ? undefined : lims.flatMap((l, i) => (i === 0 ? [l] : [<Text key={`dot${i}`}> · </Text>, l]))
 
@@ -309,9 +415,9 @@ export const register: Register = on => {
           <Box flexDirection="row" flexShrink={0}>
             {pills('r', [
               { color: BLUE, body: model },
-              { color: SURFACE0, body: branch },
+              { color: PILL_BG, body: branch },
             ])}
-            {d.added > 0 || d.removed > 0 ? (
+            {has('diff') ? (
               <Text>
                 {' '}
                 <Text color={GREEN}>{`+${d.added}`}</Text>/<Text color={RED}>{`-${d.removed}`}</Text>
@@ -320,9 +426,9 @@ export const register: Register = on => {
           </Box>
           <Box flexGrow={1} minWidth={1} />
           <Box flexDirection="row" flexShrink={0}>
-            {s.cost === undefined ? null : <Text color={GREEN} bold>{`$${Math.round(s.cost * 100) / 100} `}</Text>}
+            {has('cost') ? <Text color={GREEN} bold>{costText}</Text> : null}
             {pills('l', [
-              { color: SURFACE0, body: ctx },
+              { color: PILL_BG, body: ctx },
               { color: BLUE, body: lim },
             ])}
           </Box>

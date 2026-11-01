@@ -42,11 +42,11 @@ const SHELL_REASON: Record<TdiffShellReason, string> = {
   failed: 'snapshots failed',
 }
 
-const OUTSIDE_COLOR = 'suggestion'
+const OUTSIDE_COLOR = 'ide'
 const FOCUS_COLOR = 'suggestion'
 const ROOT_COLOR = 'claude'
-const EDITED = 'edited since'
-const NO_DIFF = 'no text diff'
+const EDITED = '✎'
+const NO_DIFF: Record<TdiffNoText, string> = { binary: 'binary', 'too-large': 'too large' }
 const INDENT = 2
 const GLYPH = 2
 const LETTER_SLOT = 2
@@ -54,6 +54,9 @@ const MIN_COLUMNS = 24
 const MAX_ROWS = 250
 const CHAR_BUDGET = 60_000
 const ROW_COST = 200
+
+let shownStops: string[] = []
+let moving: Promise<unknown> = Promise.resolve()
 
 const noop = () => undefined
 const width = (text: string) => Array.from(text).length
@@ -83,7 +86,7 @@ export function registerPane(on: On) {
     if (before > 0 || (await read($, rows)).length === 0) return ran
     if (!(await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
     return ran
-  }).catch(($, e, next) => next(e))
+  })
 
   on('command.run', { command: 'tdiff' }, async $ => {
     const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
@@ -95,7 +98,13 @@ export function registerPane(on: On) {
     return { text: opened.isPlaced ? 'Tdiff opened.' : `Tdiff is waiting: ${opened.reason}` }
   })
 
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+  on('ui.focus', { requestId: PANE }, async ($, raw, next) => {
+    let e = raw
+    if (e.element?.startsWith('jk:')) {
+      const to = (await read($, focused)) === shownStops[0] ? shownStops[1] : shownStops[0]
+      if (to === undefined) return {}
+      e = { ...e, element: to }
+    }
     const moved = await next(e)
     if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
     return moved
@@ -191,7 +200,7 @@ export function registerPane(on: On) {
         key: 'elsewhere',
         heading: ELSEWHERE,
         headingColor: OUTSIDE_COLOR,
-        topColor: ROOT_COLOR,
+        topColor: OUTSIDE_COLOR,
         lines: visibleLines(buildTree(labelled.filter(one => !one.isUnderRoot), 'elsewhere:'), folded),
       },
     ].filter(section => section.lines.length > 0)
@@ -244,8 +253,28 @@ export function registerPane(on: On) {
       await $.ui.focus({ requestId: PANE, key: `dir:${key}` }).catch(noop)
     }
 
+    const stops: string[] = []
+    const step = (by: number) => () => {
+      moving = moving.then(async () => {
+        const at = stops.indexOf((await read($, focused)) ?? '')
+        const to = stops[Math.max(0, Math.min(stops.length - 1, at < 0 ? 0 : at + by))]
+        if (to === undefined) return
+        const moved = await $.ui.focus({ requestId: PANE, key: to }).catch(() => ({ deny: 'gone' }))
+        if (moved.deny === undefined) await update($, focused, () => to)
+      }).catch(noop)
+      return moving
+    }
+    const jkKeys = (
+      <Box key="jk" display="none">
+        <Button key="jk:j" label="j" hotkey="j" onPress={step(1)} />
+        <Button key="jk:k" label="k" hotkey="k" onPress={step(-1)} />
+      </Box>
+    )
+    const stop = (key: string) => (stops.push(key) === 2 ? jkKeys : null) // inside the second row, so the ui.focus redirect can always step past them
+
     const TreeRow = ({ line, topColor }: { line: Line; topColor: string | undefined }) => {
       const indent = line.depth * INDENT
+      const jk = stop(line.node.kind === 'dir' ? `dir:${line.node.key}` : line.node.row.path)
       if (line.node.kind === 'dir') {
         const dir = line.node
         const isLit = ring === `dir:${dir.key}`
@@ -255,6 +284,7 @@ export function registerPane(on: On) {
         const name = middle(dir.name, columns - indent - GLYPH - width(note) - tail)
         return (
           <Box key={`row:${dir.key}`} flexDirection="row" paddingLeft={indent}>
+            {jk}
             <Button key={`dir:${dir.key}`} plain onPress={() => void toggle(dir.key, dir.count)()}>
               <Text {...ink(isLit, undefined, true)}>{isCollapsed ? '▸ ' : '▾ '}</Text>
               <Text {...ink(isLit, line.depth === 0 ? topColor : undefined)} wrap="truncate-middle">
@@ -272,10 +302,13 @@ export function registerPane(on: On) {
       const { row } = line.node
       const kind = LETTER[row.kind]
       const isLit = ring === row.path
-      const right = (row.isEditedSince ? 1 + width(EDITED) : 0) + (row.noText === null ? countsRoom : 1 + Math.max(countWidth, width(NO_DIFF)))
-      const name = middle(line.node.name, columns - indent - GLYPH - LETTER_SLOT - right)
+      const flag = row.isEditedSince ? EDITED : ''
+      const slot = LETTER_SLOT + width(flag)
+      const right = row.noText === null ? countsRoom : 1 + Math.max(countWidth, width(NO_DIFF[row.noText]))
+      const name = middle(line.node.name, columns - indent - GLYPH - slot - right)
       return (
         <Box key={`row:${row.path}`} flexDirection="row" paddingLeft={indent}>
+          {jk}
           <Button
             key={row.path}
             plain
@@ -286,21 +319,21 @@ export function registerPane(on: On) {
           >
             <Text {...ink(isLit)}>
               {'  '}
-              <Text {...ink(isLit, kind.color)}>{kind.letter}</Text>{' '}
+              <Text {...ink(isLit, kind.color)}>{kind.letter}</Text>
+              <Text {...ink(isLit, 'warning')}>{flag}</Text>{' '}
             </Text>
             <Text bold {...ink(isLit)} wrap="truncate-middle">
               {name}
             </Text>
             <Text {...ink(isLit)}>
-              {fill(columns - indent - GLYPH - LETTER_SLOT - width(name) - right)}
-              <Text {...ink(isLit, 'warning')}>{row.isEditedSince ? ` ${EDITED}` : ''}</Text>
+              {fill(columns - indent - GLYPH - slot - width(name) - right)}
             </Text>
             {row.noText === null ? (
               counted(row.adds, row.dels, false, isLit)
             ) : (
               <Text mono {...ink(isLit, undefined, true)}>
                 {' '}
-                {padStart(NO_DIFF, countWidth)}
+                {padStart(NO_DIFF[row.noText], countWidth)}
               </Text>
             )}
           </Button>
@@ -308,7 +341,7 @@ export function registerPane(on: On) {
       )
     }
 
-    return (
+    const tree = (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row">
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -337,5 +370,7 @@ export function registerPane(on: On) {
         {footer}
       </Box>
     )
+    shownStops = stops
+    return tree
   })
 }

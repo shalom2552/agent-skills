@@ -7,24 +7,25 @@ const turns = atom({ plugin: 'beat', key: 'turns' } as const, [])
 
 const MAX_TURNS = 200
 const MAX_SESSIONS = 50
-const STORE_VERSION = 1
+const STORE_VERSION = 2
 const SESSIONS_KEY = 'sessions'
 const TURNS_PREFIX = 'turns:'
 const BAR = 12
 const MARGIN = 2
 const GAP = 1
+const DROPS = ['context', 'io', 'cache', 'cost', 'legend', 'bar']
 const CAP_LEFT = ''
 const CAP_RIGHT = ''
 const PILL_BG = '#313244'
-const PILL_FG = '#cdd6f4'
-const STAT_COLOR = '#89b4fa'
+const PILL_FG = 'text'
+const STAT_COLOR = 'suggestion'
 
 type Part = 'think' | 'tools' | 'write' | 'other'
 const PARTS: readonly { part: Part; icon: string; color: string }[] = [
-  { part: 'think', icon: '', color: '#89b4fa' },
-  { part: 'tools', icon: '', color: '#f9e2af' },
-  { part: 'write', icon: '', color: '#a6e3a1' },
-  { part: 'other', icon: '\uf254', color: '#cba6f7' },
+  { part: 'think', icon: '', color: 'suggestion' },
+  { part: 'tools', icon: '', color: 'warning' },
+  { part: 'write', icon: '', color: 'success' },
+  { part: 'other', icon: '\uf254', color: 'merged' },
 ]
 
 export const formatDuration = (ms: number) => {
@@ -44,9 +45,10 @@ export const formatTokens = (n: number) => {
 }
 
 export const tokensOf = (usage: ModelUsage): BeatTokens => ({
-  input: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+  input: usage.input_tokens,
   output: usage.output_tokens,
   cacheRead: usage.cache_read_input_tokens,
+  cacheCreation: usage.cache_creation_input_tokens,
 })
 
 export type Stat = { key: string; parts: readonly (readonly [icon: string, value: string])[] }
@@ -54,8 +56,10 @@ export type Stat = { key: string; parts: readonly (readonly [icon: string, value
 export const statsOf = (turn: BeatTurn): Stat[] => {
   const stats: Stat[] = []
   if (turn.tokens !== undefined) {
-    stats.push({ key: 'io', parts: [['↑', formatTokens(turn.tokens.input)], ['↓', formatTokens(turn.tokens.output)]] })
-    if (turn.tokens.input > 0) stats.push({ key: 'cache', parts: [['\uf1c0 ', `${Math.round((turn.tokens.cacheRead / turn.tokens.input) * 100)}%`]] })
+    const { input, output, cacheRead, cacheCreation } = turn.tokens
+    const total = input + cacheRead + cacheCreation
+    stats.push({ key: 'io', parts: [['↑', formatTokens(input)], ['↓', formatTokens(output)]] })
+    if (total > 0) stats.push({ key: 'cache', parts: [['\uf1c0 ', `${Math.round((cacheRead / total) * 100)}%`]] })
   }
   if (turn.costUsd !== undefined) stats.push({ key: 'cost', parts: [['$', turn.costUsd.toFixed(2)]] })
   if (turn.contextPercent !== undefined) stats.push({ key: 'context', parts: [['\uf2db ', `${Math.round(turn.contextPercent)}%`]] })
@@ -69,9 +73,12 @@ export const pillWidthOf = (stats: readonly Stat[]) =>
       stats.reduce((a, s) => a + s.parts.reduce((b, [icon, value]) => b + widthOf(icon + value), 0) + s.parts.length - 1, 0) +
       2 * (stats.length - 1)
 
-export const fitStats = (stats: readonly Stat[], room: number) => {
-  let kept = [...stats]
-  while (kept.length > 0 && pillWidthOf(kept) > room) kept = kept.slice(0, -1)
+export const dropToFit = (keys: readonly string[], drops: readonly string[], width: (kept: readonly string[]) => number, room: number) => {
+  let kept = [...keys]
+  for (const key of drops) {
+    if (width(kept) <= room) break
+    kept = kept.filter(k => k !== key)
+  }
   return kept
 }
 
@@ -86,21 +93,21 @@ export const storedTurnsOf = (raw: unknown): BeatTurn[] => {
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
 
-const load = async ($: EngineInterface, cache: Map<string, BeatTurn[]>, id: string) => {
+const load = async <T,>($: Pick<EngineInterface, 'store'>, cache: Map<string, T>, prefix: string, id: string, parse: (raw: unknown) => T) => {
   const cached = cache.get(id)
   if (cached !== undefined) return cached
-  const list = storedTurnsOf(await settled($.store.get(TURNS_PREFIX + id)))
-  cache.set(id, list)
-  return list
+  const value = parse(await settled($.store.get(prefix + id)))
+  cache.set(id, value)
+  return value
 }
 
-const persist = async ($: EngineInterface, id: string, list: readonly BeatTurn[]) => {
-  await $.store.set(TURNS_PREFIX + id, { version: STORE_VERSION, turns: list })
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
-  await $.store.set(SESSIONS_KEY, kept)
   for (const key of await $.store.keys()) {
-    if (key.startsWith(TURNS_PREFIX) && !kept.includes(key.slice(TURNS_PREFIX.length))) await $.store.delete(key)
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
 export const unionMs = (spans: readonly (readonly [number, number])[]) => {
@@ -228,9 +235,9 @@ export const register: Register = on => {
       await update($, turns, list => [...list, turn].slice(-MAX_TURNS))
       const id = await settled($.session.id())
       if (id !== undefined) {
-        const list = [...(await load($, stored, id)), turn].slice(-MAX_TURNS)
+        const list = [...(await load($, stored, TURNS_PREFIX, id, storedTurnsOf)), turn].slice(-MAX_TURNS)
         stored.set(id, list)
-        await settled(persist($, id, list))
+        await settled(persist($, TURNS_PREFIX, id, { turns: list }))
       }
     }
     return done
@@ -242,7 +249,7 @@ export const register: Register = on => {
     let hit = match(await read($, turns))
     if (hit === undefined) {
       const id = await settled($.session.id())
-      if (id !== undefined) hit = match(await load($, stored, id))
+      if (id !== undefined) hit = match(await load($, stored, TURNS_PREFIX, id, storedTurnsOf))
     }
     const values = secondsOf(hit === undefined ? [0, 0, 0, 0] : [hit.think, hit.tools, hit.write, hit.other])
     const cells = cellsOf(values, BAR)
@@ -250,12 +257,24 @@ export const register: Register = on => {
     const time = formatDuration(e.props.durationMs)
     const legends = shown.map(p => ({ ...p, head: `  ${p.icon} `, tail: formatDuration(p.seconds * 1000) }))
 
-    const timeWidth =
-      widthOf(CAP_LEFT + time + CAP_RIGHT) +
-      (shown.length > 0 ? 1 + shown.reduce((a, p) => a + p.cells, 0) + legends.reduce((a, p) => a + widthOf(p.head + p.tail), 0) : 0)
+    const barWidth = 1 + shown.reduce((a, p) => a + p.cells, 0)
+    const legendWidth = legends.reduce((a, p) => a + widthOf(p.head + p.tail), 0)
     const all = hit === undefined ? [] : statsOf(hit)
+    const keys = [...all.map(s => s.key), ...(shown.length > 0 ? ['bar', 'legend'] : [])]
+    const width = (kept: readonly string[]) => {
+      const pill = pillWidthOf(all.filter(s => kept.includes(s.key)))
+      return (
+        widthOf(CAP_LEFT + time + CAP_RIGHT) +
+        (kept.includes('bar') ? barWidth : 0) +
+        (kept.includes('legend') ? legendWidth : 0) +
+        (pill > 0 ? GAP + pill : 0)
+      )
+    }
     const columns = e.viewport?.columns
-    const stats = columns === undefined ? all : fitStats(all, columns - 2 * MARGIN - timeWidth - GAP)
+    const kept = columns === undefined ? keys : dropToFit(keys, DROPS, width, columns - 2 * MARGIN)
+    const stats = all.filter(s => kept.includes(s.key))
+    const bars = kept.includes('bar') ? shown : []
+    const legend = kept.includes('legend') ? legends : []
 
     return (
       <Box flexDirection="row" marginTop={1} marginLeft={MARGIN} marginRight={MARGIN}>
@@ -264,13 +283,13 @@ export const register: Register = on => {
           <Text backgroundColor={PILL_BG} color={PILL_FG} bold>
             {time}
           </Text>
-          {shown.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
-          {shown.map(p => (
+          {bars.length > 0 && <Text backgroundColor={PILL_BG}> </Text>}
+          {bars.map(p => (
             <Text key={`bar-${p.part}`} backgroundColor={PILL_BG} color={p.color}>
               {'━'.repeat(p.cells)}
             </Text>
           ))}
-          {legends.map(p => (
+          {legend.map(p => (
             <Text key={`legend-${p.part}`} backgroundColor={PILL_BG}>
               <Text color={p.color}>{p.head}</Text>
               <Text color={PILL_FG}>{p.tail}</Text>

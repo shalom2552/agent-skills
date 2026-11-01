@@ -9,6 +9,8 @@ curl -fsSL shalom2552.github.io/agent-skills/install | bash
 ```
 Or clone and run `./install`. See `./install --help` for options.
 
+To update, run `./install -u`. It pulls the checkout and refreshes what is already installed.
+
 ## Skills
 
 | Skill | Description |
@@ -27,26 +29,35 @@ Or clone and run `./install`. See `./install --help` for options.
 
 Claude Code plugins.
 
+```sh
+claude plugin install <mod> --marketplace shalom2552/agent-skills
 ```
-/plugin install <mod> --marketplace shalom2552/agent-skills
-```
+`./install mods` does this for every mod.
 
 | Mod | Description |
 | --- | --- |
 | `spinner-words` | Swap the spinner verbs for dev ones. |
-| `tape` | `/tape` pane of tool calls per turn. |
+| `tape` | `/tape`: a live pane of every tool call, grouped by turn, with status, target and duration. |
 | `frame` | Rounded frame around your prompts. |
 | `beat` | Turn time and usage as pills. |
-| `statusline` | Bottom status line for claude. |
-| `badges` | Badge above the prompt for active skill. |
-| `tdiff` | Live diff of session changes. |
+| `statusline` | Status line as live pills under the prompt. |
+| `badges` | Badge above the prompt for each active session skill. |
+| `tdiff` | `/tdiff`: a live pane of every file Claude changed this session, with net diffs that survive resume. |
+
+## Themes
+
+Claude Code color themes. `./install themes` copies them to `~/.claude/themes` and sets `theme`. Global scope only, since Claude Code loads custom themes from there.
+
+| Theme | Description |
+| --- | --- |
+| `catppuccin` | Catppuccin Mocha. |
 
 ## Settings
 
-Small JSON files that `./install` merges into the scope's `settings.json`.
+Small JSON files that `./install` merges into the scope's `settings.json`. An entry can carry its own as `<stem>.settings.json`, applied with it.
 
 ```sh
-./install settings --scope global -y
+./install settings -y
 ```
 
 | Setting | Description |

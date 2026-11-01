@@ -11,7 +11,7 @@ export const WORDS = [
 export const pick = (word: string): string => {
   let h = 0
   for (const c of word) h = (h * 31 + c.charCodeAt(0)) >>> 0
-  return WORDS[h % WORDS.length]
+  return WORDS[h % WORDS.length] ?? word
 }
 
 export const register: Register = on => {

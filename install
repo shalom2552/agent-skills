@@ -4,6 +4,8 @@
 # mode_install_<name> with its mode_state_<name> up-to-date test.
 # A type installed by something other than files defines type_install_<type>
 # and type_state_<type>, and ignores mode.
+# A type that works only under some roots defines type_block_<type>, which
+# prints why it cannot go to the root it is given.
 # A trailing `return 0` keeps a falsy last test from tripping set -e.
 
 set -euo pipefail
@@ -18,7 +20,7 @@ readonly CLONE_URL="https://github.com/shalom2552/agent-skills.git"
 
 readonly FIELD_WIDTH=10   # label column, shared by the header and the summary
 readonly MARKER=".agent-skills-install"
-readonly DEFAULT_SCOPE="project"
+readonly DEFAULT_SCOPE="global"
 readonly DEFAULT_MODE="copy"
 
 readonly MARKETPLACE="shalom2552"   # Claude Code reserves "agent-skills"
@@ -70,6 +72,8 @@ PICK=""
 ENTRY_STATE=""
 PLUGINS=""             # `claude plugin list --json`, one object per line, read once
 MARKETPLACE_ADDED=0
+MODS_MOVED=""          # where the marketplace pointed before this run moved it
+MOD_VERSION=""         # the installed version type_state_mods found
 PLUGIN_ERR=""
 FOREIGN=0              # a blocked entry that --force would replace
 LAST_STATUS=""         # what the last emit reported
@@ -227,6 +231,7 @@ declare -A COUNTS=()
 declare -A TYPE_COUNTS=()
 EMIT_TYPE=""
 EMIT_TYPES=()
+HEADING=""             # the type heading printed last
 
 emit() {
   local status="$1" label="$2" detail="${3:-}"
@@ -250,6 +255,7 @@ emit_as() {
 
 type_heading() {
   emit_as "$1"
+  HEADING="$1"
   printf '\n  %s%s%s%s\n' "$C_BOLD" "$C_BLUE" "$1" "$C_RESET"
 }
 
@@ -292,6 +298,7 @@ summary() {
   else                      log "nothing to do"
   fi
   (( FOREIGN )) && note "blocked entries exist and were not created by install; --force replaces them"
+  [[ -n "$MODS_MOVED" ]] && note "mods now read from $(tilde "$REPO_ROOT"), not $(tilde "$MODS_MOVED")"
   return 0
 }
 
@@ -515,7 +522,7 @@ local_source() {
   REPO_ROOT="$dir"
 }
 
-scope_root_global()  { printf '%s\n' "${CLAUDE_HOME:-$HOME/.claude}"; }
+scope_root_global()  { printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
 scope_help_global()  { printf 'All projects (%s)\n' "$(tilde "$(scope_root_global)")"; }
 
 scope_root_project() { printf '%s/.claude\n' "$(abspath "${PROJECT_DIR:-$PWD}")"; }
@@ -684,40 +691,71 @@ plugin_cmd() {
   return 1
 }
 
-# installed from a marketplace that points elsewhere reads as outdated
+mod_version() {
+  sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    -- "$1/.claude-plugin/plugin.json" 2>/dev/null | head -n 1
+}
+
+# sets ENTRY_STATE and MOD_VERSION; outdated means another version or another source
 type_state_mods() {
   local src="$1" entry="$2" scope obj
-  ENTRY_STATE="new"
+  ENTRY_STATE="new"; MOD_VERSION=""
   command -v claude >/dev/null && scope="$(plugin_scope)" || return 0
   while IFS= read -r obj; do
     [[ "$obj" == *"\"id\": \"$entry@$MARKETPLACE\""* && "$obj" == *"\"scope\": \"$scope\""* ]] || continue
     [[ "$scope" == user || "$obj" == *"\"projectPath\": \"$(project_path)\""* ]] || continue
-    if [[ "$obj" == *"\"readFromFolder\": \"$src\""* ]]; then ENTRY_STATE="current"; else ENTRY_STATE="outdated"; fi
+    [[ "$obj" =~ \"version\":\ \"([^\"]*)\" ]] && MOD_VERSION="${BASH_REMATCH[1]}"
+    if [[ "$obj" == *"\"readFromFolder\": \"$src\""* && "$MOD_VERSION" == "$(mod_version "$src")" ]]; then
+      ENTRY_STATE="current"
+    else
+      ENTRY_STATE="outdated"
+    fi
   done < <(plugins_json)
   return 0
 }
 
-# the repo is a directory marketplace, so claude reads each mod in place
+# points the marketplace at this checkout once per run; sets MODS_MOVED to the old path
+mods_source() {
+  (( MARKETPLACE_ADDED )) && return 0
+  local path
+  path="$(claude plugin marketplace list --json 2>/dev/null | tr -d '\n' \
+    | sed -n "s/.*\"name\": \"$MARKETPLACE\",[^}]*\"path\": \"\([^\"]*\)\".*/\1/p")"
+  if [[ "$path" != "$REPO_ROOT" ]]; then
+    plugin_cmd marketplace add "$REPO_ROOT" || return 1
+    MODS_MOVED="$path"
+  fi
+  MARKETPLACE_ADDED=1
+}
+
+# updates an installed mod; returns 1 when the mod is not installed at this scope
+refresh_mod() {
+  local src="$1" entry="$2" scope="$3" want
+  type_state_mods "$src" "$entry"
+  case "$ENTRY_STATE" in
+    new)     return 1 ;;
+    current) emit current "$entry" "up to date"; return 0 ;;
+  esac
+  mods_source || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+  want="$(mod_version "$src")"
+  if [[ "$MOD_VERSION" == "$want" ]]; then
+    emit updated "$entry" "now read from $(tilde "$src")"
+    return 0
+  fi
+  plugin_cmd update "$entry@$MARKETPLACE" --scope "$scope" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
+  emit updated "$entry" "$MOD_VERSION -> $want"
+}
+
+# the repo is a directory marketplace; claude caches each mod by version
 type_install_mods() {
-  local src="$1" entry="$2" scope status
+  local src="$1" entry="$2" scope
   command -v claude >/dev/null || { emit blocked "$entry" "claude not found"; return 0; }
   scope="$(plugin_scope)" || { emit blocked "$entry" "mods take --scope, not --dest"; return 0; }
 
-  type_state_mods "$src" "$entry"
-  if [[ "$ENTRY_STATE" == current ]]; then
-    emit current "$entry" "up to date"
-    return 0
-  fi
+  refresh_mod "$src" "$entry" "$scope" && return 0
 
-  if (( ! MARKETPLACE_ADDED )); then
-    plugin_cmd marketplace add "$REPO_ROOT" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
-    MARKETPLACE_ADDED=1
-  fi
+  mods_source || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
   plugin_cmd install "$entry@$MARKETPLACE" --scope "$scope" || { emit blocked "$entry" "$PLUGIN_ERR"; return 0; }
-
-  status="installed"
-  [[ "$ENTRY_STATE" == new ]] || status="updated"
-  emit "$status" "$entry"
+  emit installed "$entry"
 }
 
 # shellcheck disable=SC2016 # jq variables, not shell ones
@@ -858,9 +896,16 @@ bound_install() {
   bound_fragment "$src"
   [[ -n "$BOUND" ]] || return 0
   name="${BOUND##*/}"
+  (( DO_UPDATE )) && ! marker_ours "$(sidecar_marker "$root/settings/$type/${name%.settings.json}.json")" && return 0
   emit_as settings
   fragment_install "$BOUND" "$dest" "$root" "$type/${name%.settings.json}.json" "$name"
   EMIT_TYPE="$prev"
+}
+
+# claude reads custom themes only from the global config dir
+type_block_themes() {
+  [[ "$(abspath "$1")" == "$(abspath "$(scope_root_global)")" ]] && return 1
+  printf 'themes load only from %s' "$(tilde "$(scope_root_global)")"
 }
 
 prunes() {
@@ -900,9 +945,9 @@ stale_settings() {
 }
 
 prune_settings() {
-  local root="$1" last="$2" settings="$1/settings.json" label record cur new
+  local root="$1" settings="$1/settings.json" label record cur new spec name rest dir
   while IFS=$'\t' read -r label record; do
-    [[ "$last" == settings ]] || { type_heading settings; last=settings; }
+    [[ "$HEADING" == settings ]] || type_heading settings
     if ! command -v jq >/dev/null; then
       emit blocked "$label" "jq not found"
     elif ! cur="$(settings_read "$settings")"; then
@@ -917,7 +962,84 @@ prune_settings() {
       emit removed "$label"
     fi
   done < <(stale_settings "$root")
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name rest <<<"$spec"
+    dir="$root/settings/$name"
+    [[ "$name" != settings && -d "$dir" ]] && prunes "$name" && [[ -z "$(ls -A -- "$dir")" ]] && run rmdir -- "$dir"
+  done
   return 0
+}
+
+# a copy names its source in its marker
+copy_source() {
+  local marker
+  if [[ -d "$1" ]]; then marker="$1/$MARKER"; else marker="$(sidecar_marker "$1")"; fi
+  sed -n 's/^source=//p' -- "$marker" 2>/dev/null | head -n 1
+}
+
+# prints type<TAB>path for each entry of ours whose source is gone; a link is gone once it dangles
+stale_entries() {
+  local root="$1" spec name src_rel dest_rel rest dest src
+  for spec in "${ASSET_TYPES[@]}"; do
+    IFS='|' read -r name src_rel dest_rel rest <<<"$spec"
+    [[ "$dest_rel" != - ]] || continue
+    prunes "$name" || continue
+    declare -F "type_install_${name}" >/dev/null && continue
+    for dest in "$root/$dest_rel"/*; do
+      [[ -e "$dest" || -L "$dest" ]] || continue
+      [[ -e "$REPO_ROOT/$src_rel/${dest##*/}" ]] && continue
+      owned_by_installer "$dest" || continue
+      if [[ -L "$dest" ]]; then
+        [[ -e "$dest" ]] && continue
+      else
+        src="$(copy_source "$dest")"
+        [[ -n "$src" && -e "$src" ]] && continue
+      fi
+      printf '%s\t%s\n' "$name" "$dest"
+    done
+  done
+  return 0
+}
+
+prune_entries() {
+  local root="$1" type dest
+  while IFS=$'\t' read -r type dest; do
+    [[ "$HEADING" == "$type" ]] || type_heading "$type"
+    emit_as "$type"
+    drop_dest "$dest"
+    emit removed "${dest##*/}"
+  done < <(stale_entries "$root")
+  return 0
+}
+
+# prints each installed mod of ours the marketplace no longer lists
+stale_mods() {
+  local scope obj id list="$REPO_ROOT/.claude-plugin/marketplace.json"
+  prunes mods && [[ -f "$list" ]] && command -v claude >/dev/null && scope="$(plugin_scope)" || return 0
+  while IFS= read -r obj; do
+    [[ "$obj" =~ \"id\":\ \"([^\"@]*)@$MARKETPLACE\" ]] || continue
+    id="${BASH_REMATCH[1]}"
+    [[ "$obj" == *"\"scope\": \"$scope\""* ]] || continue
+    [[ "$scope" == user || "$obj" == *"\"projectPath\": \"$(project_path)\""* ]] || continue
+    grep -q "\"name\": *\"$id\"" -- "$list" || printf '%s\n' "$id"
+  done < <(plugins_json)
+  return 0
+}
+
+prune_mods() {
+  local scope id ids=()
+  mapfile -t ids < <(stale_mods)
+  (( ${#ids[@]} )) || return 0
+  scope="$(plugin_scope)"
+  [[ "$HEADING" == mods ]] || type_heading mods
+  emit_as mods
+  for id in "${ids[@]}"; do
+    if plugin_cmd uninstall "$id@$MARKETPLACE" --scope "$scope"; then
+      emit removed "$id"
+    else
+      emit blocked "$id" "$PLUGIN_ERR"
+    fi
+  done
 }
 
 hide_cursor() { CURSOR_HIDDEN=1; printf '\033[?25l' >&2; }
@@ -1429,21 +1551,38 @@ count_types() {
   printf '%s' "${out:-no entries}"
 }
 
-# one heading per asset type, so the run reads the way the picker looked
-install_entries() {
-  local root="$1" row type src dest_rel meta entry dest_dir last=""
-  local -A made=()
+# keeps the ROWS install already put under root, for an update that adds nothing
+installed_rows() {
+  local root="$1" row type src dest_rel meta entry kept=()
   for row in ${ROWS[@]+"${ROWS[@]}"}; do
     unpack_row "$row"
-    if [[ "$type" != "$last" ]]; then
-      last="$type"
-      type_heading "$type"
-    fi
+    entry_state "$src" "$root/$dest_rel/$entry" "$type"
+    [[ "$ENTRY_STATE" == current || "$ENTRY_STATE" == outdated ]] && kept+=("$row")
+  done
+  ROWS=( ${kept[@]+"${kept[@]}"} )
+}
+
+# one heading per asset type, so the run reads the way the picker looked
+install_entries() {
+  local root="$1" row type src dest_rel meta entry dest_dir why
+  local -A made=()
+  HEADING=""
+  for row in ${ROWS[@]+"${ROWS[@]}"}; do
+    unpack_row "$row"
+    [[ "$type" == "$HEADING" ]] || type_heading "$type"
     if declare -F "type_install_${type}" >/dev/null; then
       "type_install_${type}" "$src" "$entry"
       continue
     fi
+    if declare -F "type_block_${type}" >/dev/null && why="$("type_block_${type}" "$root")"; then
+      emit blocked "$entry" "$why"
+      continue
+    fi
     dest_dir="$root/$dest_rel"
+    if (( DO_UPDATE )); then
+      MODE="copy"
+      [[ -L "$dest_dir/$entry" ]] && MODE="link"
+    fi
     if [[ -z "${made[$dest_dir]+x}" ]]; then
       run mkdir -p -- "$dest_dir"
       made[$dest_dir]=1
@@ -1451,7 +1590,9 @@ install_entries() {
     "mode_install_${MODE}" "$src" "$dest_dir/$entry" "$entry"
     [[ "$LAST_STATUS" == blocked ]] || bound_install "$root" "$type" "$src" "$dest_dir/$entry"
   done
-  prune_settings "$root" "$last"
+  prune_entries "$root"
+  prune_mods
+  prune_settings "$root"
   printf '\n'
 }
 
@@ -1511,7 +1652,7 @@ FLAGS
   -f, --force           Replace destinations install did not create
   -n, --dry-run         Print what would happen, change nothing
   -l, --list            List entries and exit
-  -u, --update          Update the checkout behind linked entries and exit
+  -u, --update          Pull the checkout, then refresh only what is installed
   -h, --help            Show this help
 
 NAMES
@@ -1538,7 +1679,7 @@ EOF
 ENVIRONMENT
   AGENT_SKILLS_REPO     Clone URL, overriding CLONE_URL in this script
   AGENT_SKILLS_HOME     Checkout used by a piped run (default: $(tilde "$SOURCE_HOME"))
-  CLAUDE_HOME           Global assets root (default: ~/.claude)
+  CLAUDE_CONFIG_DIR     Global assets root (default: ~/.claude)
 
 EXAMPLES
   $ ./install --list
@@ -1628,36 +1769,35 @@ main() {
     INTERACTIVE=1
   fi
 
-  if (( DO_UPDATE )); then
-    fetch_ready
-    fetch_source
-    return 0
-  fi
-
   local bannered=0
-  if ! local_source || [[ "$REPO_ROOT" -ef "$SOURCE_HOME" ]]; then
+  if (( DO_UPDATE )) || ! local_source || [[ "$REPO_ROOT" -ef "$SOURCE_HOME" ]]; then
     if (( ! DO_LIST )); then
       banner
       bannered=1
     fi
     fetch_ready
-    (( INTERACTIVE )) && wizard_fetch
+    (( INTERACTIVE && ! DO_UPDATE )) && wizard_fetch
     fetch_source
   fi
 
   local row
   ROWS=()
   while IFS= read -r row; do ROWS+=("$row"); done < <(walk_entries)
-  if (( ${#ROWS[@]} == 0 )) && { (( DO_LIST )) || [[ -z "$(stale_settings "$(resolve_root)")" ]]; }; then
+  if (( ${#ROWS[@]} == 0 )) && { (( DO_LIST )) || [[ -z "$(stale_settings "$(resolve_root)")$(stale_entries "$(resolve_root)")" ]]; }; then
     die "no matching entries"
   fi
 
   (( DO_LIST )) && { list_assets; return 0; }
 
   (( bannered )) || banner
-  (( INTERACTIVE )) && wizard
-
   local root
+  if (( DO_UPDATE )); then
+    installed_rows "$(resolve_root)"
+    MODE="as installed"
+  elif (( INTERACTIVE )); then
+    wizard
+  fi
+
   root="$(resolve_root)"
   LABEL_WIDTH="$(compute_label_width)"
 

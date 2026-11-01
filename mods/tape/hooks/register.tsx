@@ -1,14 +1,22 @@
 import { atom, read, update } from 'claude-code'
-import type { CoreEngineInterface, Register } from 'claude-code'
+import type { CoreEngineInterface, EngineInterface, Register } from 'claude-code'
 
-import type { TapeCall, TapeStatus, TapeTurn } from '../types'
+import type { TapeAgent, TapeCall, TapeStatus, TapeTurn } from '../types'
 
 const PANE = 'tape'
 const TITLE = 'Tape'
 const MAX_CALLS = 300
+const MAX_AGENT_CALLS = 300
 const MAX_TURNS = 50
+const MAX_AGENTS = 50
 const MAX_SESSIONS = 5
+const STORE_VERSION = 1
 const SESSIONS_KEY = 'sessions'
+const CALLS_PREFIX = 'calls:'
+const TURNS_PREFIX = 'turns:'
+const AGENTS_PREFIX = 'agents:'
+const SWITCH_POLL_MS = 200
+const SWITCH_POLLS = 25
 const MAX_TARGET = 1000
 const MAX_LABEL = 16
 const INDENT = 2
@@ -16,14 +24,17 @@ const GLYPH = 2
 const MIN_TARGET_WIDTH = 10
 const MIN_COLUMNS = 24
 const MIN_PROMPT_COLUMNS = 40
+const OUTPUT_LINES = 2000
 const FOCUS_COLOR = 'suggestion'
 const TARGET_KEYS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'skill', 'description', 'prompt']
 
 const calls = atom({ plugin: 'tape', key: 'calls' } as const, [])
 const turns = atom({ plugin: 'tape', key: 'turns' } as const, [])
+const agents = atom({ plugin: 'tape', key: 'agents' } as const, [])
 const folds = atom({ plugin: 'tape', key: 'folds' } as const, {})
 const focused = atom({ plugin: 'tape', key: 'focused' } as const, null)
 const open = atom({ plugin: 'tape', key: 'open' } as const, null)
+const expanded = atom({ plugin: 'tape', key: 'expanded' } as const, false)
 
 const ICON: Record<TapeStatus, { glyph: string; color: string }> = {
   running: { glyph: '●', color: 'warning' },
@@ -77,73 +88,189 @@ export const clip = (text: string, room: number) => {
   return room <= 0 ? '' : `${chars.slice(0, room - 1).join('')}…`
 }
 
-const labelOfCall = (call: TapeCall) => {
-  const name =
-    call.tool === 'Bash' ? '$' : call.tool.length > MAX_LABEL ? `${call.tool.slice(0, MAX_LABEL - 1)}…` : call.tool
-  return call.isAgent ? `↳${name}` : name
+const labelOfCall = (call: TapeCall) =>
+  call.tool === 'Bash' ? '$' : call.tool.length > MAX_LABEL ? `${call.tool.slice(0, MAX_LABEL - 1)}…` : call.tool
+
+export const formatDuration = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
-export const formatSeconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`)
+export const formatSeconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : formatDuration(ms))
 
 const timeOf = (call: TapeCall) =>
   call.endedAt !== undefined ? formatSeconds(call.endedAt - call.startedAt) : call.status === 'running' ? '…' : ''
 
 const turnName = (n: number) => (n === 0 ? 'Before first turn' : `Turn ${n}`)
 
+export const failedNote = (failed: number, columns: number) =>
+  failed === 0 ? '' : columns >= MIN_PROMPT_COLUMNS ? ` · ${failed} failed` : ` · ✗${failed}`
+
+const typeName = (type: string) => (type === 'general-purpose' ? 'general' : type)
+
+export const spanOf = (agent: TapeAgent) =>
+  `T${agent.spawnTurn}→${agent.status === 'running' ? 'now' : `T${agent.endTurn ?? agent.spawnTurn}`}`
+
+export const capCalls = (list: TapeCall[]) => {
+  const kept = new Set([
+    ...list.filter(call => call.agentId === undefined).slice(-MAX_CALLS),
+    ...list.filter(call => call.agentId !== undefined).slice(-MAX_AGENT_CALLS),
+  ])
+  return list.filter(call => kept.has(call))
+}
+
+type Output = { text: string; isError: boolean; result?: unknown }
+
+const field = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined
+
+const linesOf = (text: string) => (text.trim().length === 0 ? [] : text.replace(/\n+$/, '').split('\n'))
+
+const countOf = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+
+const diffOf = (result: unknown) => {
+  const patch = field(result, 'structuredPatch')
+  if (!Array.isArray(patch)) return undefined
+  const lines: unknown[] = patch.flatMap(hunk => field(hunk, 'lines') ?? [])
+  const content = field(result, 'content')
+  if (lines.length === 0 && field(result, 'type') === 'create' && typeof content === 'string') {
+    return `+${linesOf(content).length} −0`
+  }
+  const added = lines.filter(line => typeof line === 'string' && line.startsWith('+')).length
+  const removed = lines.filter(line => typeof line === 'string' && line.startsWith('-')).length
+  return `+${added} −${removed}`
+}
+
+export const summaryOf = (call: TapeCall, out: Output) => {
+  const lines = linesOf(out.text)
+  if (call.status === 'denied') return `denied: ${lines[0] ?? ''}`
+  if (out.isError) {
+    const exit = call.tool === 'Bash' ? /Exit code (\d+)/.exec(out.text)?.[1] : undefined
+    return exit !== undefined ? `exit ${exit}` : 'error'
+  }
+  if (call.tool === 'Read') {
+    const read = field(field(out.result, 'file'), 'numLines')
+    return `${countOf(typeof read === 'number' ? read : lines.length, 'line')} · ${call.target}`
+  }
+  if (call.tool === 'Edit' || call.tool === 'Write') return diffOf(out.result) ?? countOf(lines.length, 'line')
+  return countOf(lines.length, 'line')
+}
+
+export const headOf = (text: string, room = OUTPUT_LINES) => {
+  const lines = linesOf(text)
+  return { more: Math.max(0, lines.length - room), lines: lines.slice(0, room) }
+}
+
 const shortTool = (tool: string) => (tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool)
 
-type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session'>
-type Live = { turn: number; sessionId?: string; queue: Promise<void> }
+type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session' | 'clock'>
+type Live = { turn: number; sessionId?: string; queue: Promise<unknown> }
 
-const callsKey = (id: string) => `calls:${id}`
-const turnsKey = (id: string) => `turns:${id}`
-const listOf = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : [])
+const live: Live = { turn: 0, queue: Promise.resolve() }
+let shownStops: string[] = []
+let moving: Promise<unknown> = Promise.resolve()
 
-async function adopt($: Engine, live: Live, id: string) {
+const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+
+export const keptSessionsOf = (raw: unknown, id: string) =>
+  [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
+
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
+  const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
+  }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
+}
+
+export const storedListOf = <T,>(raw: unknown, field: string): T[] => {
+  if (typeof raw !== 'object' || raw === null || Reflect.get(raw, 'version') !== STORE_VERSION) return []
+  const list: unknown = Reflect.get(raw, field)
+  return Array.isArray(list) ? list : []
+}
+
+async function adopt($: Engine, id: string) {
   live.sessionId = id
-  const savedCalls = listOf<TapeCall>(await $.store.get(callsKey(id))).map(call =>
+  const savedCalls = storedListOf<TapeCall>(await settled($.store.get(CALLS_PREFIX + id)), 'calls').map(call =>
     call.status === 'running' ? { ...call, status: 'error' as const } : call,
   )
-  const savedTurns = listOf<TapeTurn>(await $.store.get(turnsKey(id)))
+  const savedTurns = storedListOf<TapeTurn>(await settled($.store.get(TURNS_PREFIX + id)), 'turns')
+  const savedAgents = storedListOf<TapeAgent>(await settled($.store.get(AGENTS_PREFIX + id)), 'agents').map(agent =>
+    agent.status === 'running' ? { ...agent, status: 'error' as const } : agent,
+  )
   live.turn = savedTurns[savedTurns.length - 1]?.n ?? 0
   await update($, calls, () => savedCalls)
   await update($, turns, () => savedTurns)
+  await update($, agents, () => savedAgents)
   await update($, folds, () => ({}))
   await update($, open, () => null)
-
-  const ids = [...listOf<string>(await $.store.get(SESSIONS_KEY)).filter(one => one !== id), id]
-  for (const stale of ids.slice(0, -MAX_SESSIONS)) {
-    await $.store.delete(callsKey(stale))
-    await $.store.delete(turnsKey(stale))
-  }
-  await $.store.set(SESSIONS_KEY, ids.slice(-MAX_SESSIONS))
+  await update($, expanded, () => false)
 }
 
-async function sync($: Engine, live: Live) {
-  const id = await $.session.id()
-  if (id !== live.sessionId) await adopt($, live, id)
+async function sync($: Engine) {
+  const id = await settled($.session.id())
+  if (id !== undefined && id !== live.sessionId) await adopt($, id)
 }
 
-function ensure($: Engine, live: Live) {
-  live.queue = live.queue.then(() => sync($, live)).catch(() => undefined)
+function enqueue(task: () => Promise<unknown>) {
+  live.queue = live.queue.then(task).catch(noop)
   return live.queue
 }
 
-async function persist($: Engine, key: string, value: unknown) {
-  await $.store.set(key, value).catch(() => undefined)
+function ensure($: Engine) {
+  return enqueue(() => sync($))
 }
 
-async function saveCalls($: Engine, live: Live, list: TapeCall[]) {
-  if (live.sessionId !== undefined) await persist($, callsKey(live.sessionId), list)
+function followSwitch($: Engine, endedId: string) {
+  let polls = 0
+  const timer = $.clock.every(SWITCH_POLL_MS, () => {
+    polls += 1
+    void $.session
+      .id()
+      .then(async id => {
+        if (id === endedId && polls < SWITCH_POLLS) return
+        timer.cancel()
+        if (id !== endedId) await ensure($)
+      })
+      .catch(noop)
+  })
 }
 
-async function saveTurns($: Engine, live: Live, list: TapeTurn[]) {
-  if (live.sessionId !== undefined) await persist($, turnsKey(live.sessionId), list)
+function saveCalls($: Engine) {
+  return enqueue(async () => {
+    if (live.sessionId !== undefined) await persist($, CALLS_PREFIX, live.sessionId, { calls: await read($, calls) })
+  })
+}
+
+function saveTurns($: Engine) {
+  return enqueue(async () => {
+    if (live.sessionId !== undefined) await persist($, TURNS_PREFIX, live.sessionId, { turns: await read($, turns) })
+  })
+}
+
+function saveAgents($: Engine) {
+  return enqueue(async () => {
+    if (live.sessionId !== undefined) await persist($, AGENTS_PREFIX, live.sessionId, { agents: await read($, agents) })
+  })
+}
+
+async function touchAgent($: Engine, id: string, change: Partial<TapeAgent>) {
+  const now = await $.clock.now()
+  await update($, agents, list =>
+    list.some(agent => agent.id === id)
+      ? list.map(agent => (agent.id === id ? { ...agent, ...change } : agent))
+      : [...list, { id, description: '', type: '', spawnTurn: live.turn, startedAt: now, status: 'running' as const, ...change }].slice(
+          -MAX_AGENTS,
+        ),
+  )
+  await saveAgents($)
 }
 
 export const register: Register = on => {
-  const live: Live = { turn: 0, queue: Promise.resolve() }
-
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -151,7 +278,7 @@ export const register: Register = on => {
       description: 'Toggle a live pane of tool calls, grouped by turn',
       immediate: true,
     })
-    await ensure($, live)
+    await ensure($)
     return started
   })
 
@@ -161,44 +288,69 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Tape closed.' }
     }
-    await $.ui.open({ id: PANE, title: TITLE })
-    return { text: 'Tape opened.' }
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    return { text: opened.isPlaced ? 'Tape opened.' : `Tape is waiting: ${opened.reason}` }
   })
 
   on('session.end', async ($, e, next) => {
-    await saveCalls($, live, await read($, calls))
-    await saveTurns($, live, await read($, turns))
+    await saveCalls($)
+    await saveTurns($)
+    await saveAgents($)
     const ended = await next(e)
-    if (e.reason === 'clear' || e.reason === 'resume') await ensure($, live)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ensure($)
+      if (live.sessionId === e.sessionId) followSwitch($, e.sessionId)
+    }
     return ended
   })
 
   on('turn.start', async ($, e, next) => {
-    await ensure($, live)
+    await ensure($)
+    if (e.agentId !== undefined) {
+      await touchAgent($, e.agentId, { status: 'running', endTurn: undefined, endedAt: undefined })
+      return next(e)
+    }
     live.turn += 1
-    const entry: TapeTurn = { n: live.turn, prompt: labelOf(e.text) }
-    await saveTurns($, live, await update($, turns, list => [...list, entry].slice(-MAX_TURNS)))
+    const back = (await read($, agents)).find(agent => e.text.includes(agent.id))
+    const entry: TapeTurn = { n: live.turn, prompt: back !== undefined ? `↩ ${back.description || back.id}` : labelOf(e.text) }
+    await update($, turns, list => [...list, entry].slice(-MAX_TURNS))
+    await saveTurns($)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    await saveCalls($, live, await read($, calls))
+    const { agentId } = e
+    if (agentId !== undefined && (await read($, agents)).some(agent => agent.id === agentId)) {
+      const status = e.reason === 'answer' ? 'ok' : 'error'
+      await touchAgent($, agentId, { status, endTurn: live.turn, endedAt: await $.clock.now() })
+    }
+    await saveCalls($)
     return next(e)
   })
 
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (spawned.agentId !== undefined) {
+      await ensure($)
+      await touchAgent($, spawned.agentId, { description: e.description, type: e.subagentType, toolUseId: e.tool_use_id })
+    }
+    return spawned
+  })
+
   on('tool.call', async ($, e, next) => {
-    await ensure($, live)
+    await ensure($)
     const call: TapeCall = {
       id: e.tool_use_id,
       turn: live.turn,
       tool: shortTool(String(e.tool)),
       target: targetOf(e as unknown as Record<string, unknown>, await $.session.cwd()),
-      isAgent: e.agentId !== undefined,
+      agentId: e.agentId,
       startedAt: await $.clock.now(),
       status: 'running',
     }
     const before = (await read($, calls)).length
-    await saveCalls($, live, await update($, calls, list => [...list, call].slice(-MAX_CALLS)))
+    await update($, calls, list => capCalls([...list, call]))
+    await saveCalls($)
     if (before === 0 && !(await $.ui.panes()).some(pane => pane.id === PANE)) {
       await $.ui.open({ id: PANE, title: TITLE }).catch(noop)
     }
@@ -210,15 +362,18 @@ export const register: Register = on => {
       return ran
     } finally {
       const endedAt = await $.clock.now()
-      await saveCalls(
-        $,
-        live,
-        await update($, calls, list => list.map(one => (one.id === call.id ? { ...one, status, endedAt } : one))),
-      )
+      await update($, calls, list => list.map(one => (one.id === call.id ? { ...one, status, endedAt } : one)))
+      await saveCalls($)
     }
   })
 
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+  on('ui.focus', { requestId: PANE }, async ($, raw, next) => {
+    let e = raw
+    if (e.element?.startsWith('jk:')) {
+      const to = (await read($, focused)) === shownStops[0] ? shownStops[1] : shownStops[0]
+      if (to === undefined) return {}
+      e = { ...e, element: to }
+    }
     const moved = await next(e)
     if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
     return moved
@@ -228,18 +383,86 @@ export const register: Register = on => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     const list = await read($, calls)
     const known = await read($, turns)
+    const crew = await read($, agents)
     const folded = await read($, folds)
     const shownId = await read($, open)
+    const isExpanded = await read($, expanded)
     const ring = e.props.isFocused ? await read($, focused) : null
     const columns = Math.max(MIN_COLUMNS, e.props.bodyColumns)
 
     const ink = (isLit: boolean, color?: string, isDim?: boolean) =>
       isLit ? { color: FOCUS_COLOR } : { color, dimColor: isDim }
 
+    const team = [...crew]
+    for (const call of list) {
+      const { agentId } = call
+      if (agentId !== undefined && !team.some(agent => agent.id === agentId)) {
+        team.push({ id: agentId, description: '', type: '', spawnTurn: call.turn, startedAt: call.startedAt, status: 'ok' })
+      }
+    }
+    const handle = new Map(team.map((agent, i) => [agent.id, `a${i + 1}`]))
+    const agentOf = (id: string | undefined) => team.find(agent => agent.id === id)
+    const spawnedBy = (call: TapeCall) => (call.tool === 'Agent' ? crew.find(agent => agent.toolUseId === call.id) : undefined)
+    const now = await $.clock.now()
+    const lengthOf = (agent: TapeAgent) => formatSeconds((agent.endedAt ?? now) - agent.startedAt)
+    const nameOf = (agent: TapeAgent) => [handle.get(agent.id), typeName(agent.type)].filter(Boolean).join(' ')
+    const statusOf = (call: TapeCall) => spawnedBy(call)?.status ?? call.status
+    const timeOfRow = (call: TapeCall) => {
+      const agent = spawnedBy(call)
+      return agent === undefined ? timeOf(call) : agent.status === 'running' ? '…' : lengthOf(agent)
+    }
+    const targetOfRow = (call: TapeCall) => {
+      const agent = spawnedBy(call)
+      return agent === undefined ? call.target : `${handle.get(agent.id)} ${call.target}`
+    }
+
+    const outputOf = async (call: TapeCall): Promise<Output | undefined> => {
+      const found =
+        call.agentId === undefined
+          ? await settled($.session.messages())
+          : await settled($.session.messages({ agentId: call.agentId }))
+      if (!Array.isArray(found)) return undefined
+      for (const message of found) {
+        const use = message.toolUses.find(one => one.tool_use_id === call.id)
+        if (use?.text !== undefined) return { text: use.text, isError: use.isError === true, result: use.result }
+      }
+      return undefined
+    }
+
+    const reportOf = async (agentId: string) => {
+      const found = await settled($.session.messages({ agentId }))
+      return Array.isArray(found) ? found.filter(m => m.role === 'assistant' && m.text.length > 0).at(-1)?.text : undefined
+    }
+
     const shown = list.find(call => call.id === shownId)
     if (shown !== undefined) {
-      const icon = ICON[shown.status]
-      const prompt = known.find(t => t.n === shown.turn)?.prompt ?? ''
+      const icon = ICON[statusOf(shown)]
+      const spawned = spawnedBy(shown)
+      const out = shown.status === 'running' ? undefined : await outputOf(shown)
+      const isFailed = out?.isError === true || shown.status === 'error' || shown.status === 'denied'
+      const summary =
+        out === undefined
+          ? ''
+          : spawned !== undefined
+            ? [
+                spawned.status === 'running' ? 'running' : spawned.status === 'ok' ? 'done' : 'failed',
+                lengthOf(spawned),
+                countOf(list.filter(call => call.agentId === spawned.id).length, 'call'),
+              ].join(' · ')
+            : summaryOf(shown, out)
+      const report = isExpanded && spawned !== undefined ? await reportOf(spawned.id) : undefined
+      const body = !isExpanded || out === undefined ? undefined : headOf(spawned !== undefined ? (report ?? out.text) : out.text)
+      const rule = (label: string, room = columns) => {
+        const head = clip(`── ${label} `, Math.max(0, room - 2))
+        return head + '─'.repeat(Math.max(0, room - width(head)))
+      }
+      const outColor = isFailed ? 'error' : undefined
+      const more = body !== undefined && body.more > 0 ? `… +${countOf(body.more, 'more line')}` : ''
+      const owner = agentOf(shown.agentId)
+      const prompt = owner === undefined ? (known.find(t => t.n === shown.turn)?.prompt ?? '') : ''
+      const where =
+        owner === undefined ? turnName(shown.turn) : [nameOf(owner), owner.description].filter(Boolean).join(' · ')
+      const asked = prompt.length > 0 ? clip(prompt, columns - width(`${icon.glyph} ${shown.tool} · ${where} · ""`)) : ''
       const back = {
         key: 'back',
         hotkey: 'b',
@@ -247,6 +470,16 @@ export const register: Register = on => {
         onPress: async () => {
           await update($, open, () => null)
           await $.ui.focus({ requestId: PANE, key: shown.id }).catch(noop)
+        },
+      }
+      const flip = isExpanded ? 'hide' : 'show'
+      const output = {
+        key: 'output',
+        hotkey: 'o',
+        label: flip,
+        onPress: async () => {
+          await update($, expanded, was => !was)
+          await $.ui.focus({ requestId: PANE, key: 'output' }).catch(noop)
         },
       }
       return (
@@ -259,32 +492,53 @@ export const register: Register = on => {
             ) : (
               <Button {...back} />
             )}
-            <Text dimColor>{timeOf(shown)}</Text>
+            <Text dimColor>{timeOfRow(shown)}</Text>
           </Box>
           <Text>
-            <Text color={icon.color}>{icon.glyph}</Text>{' '}
-            <Text bold>
-              {shown.isAgent ? '↳' : ''}
-              {shown.tool}
-            </Text>
-            <Text dimColor> · {turnName(shown.turn)}</Text>
+            <Text color={icon.color}>{icon.glyph}</Text> <Text bold>{shown.tool}</Text>
+            <Text dimColor> · {where}</Text>
+            {asked.length > 0 && <Text dimColor> · </Text>}
+            {asked.length > 0 && <Text color="claude">"{asked}"</Text>}
           </Text>
-          {prompt.length > 0 && (
-            <Text dimColor italic wrap="truncate-end">
-              {prompt}
-            </Text>
+          {shown.target.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text dimColor>{rule(shown.tool === 'Bash' ? 'command' : 'input')}</Text>
+              {shown.tool === 'Bash' ? (
+                <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
+              ) : (
+                <Text>{shown.target}</Text>
+              )}
+            </Box>
           )}
-          {shown.target.length > 0 &&
-            (shown.tool === 'Bash' ? (
-              <Code key="target" source={shown.target.replaceAll(' ⏎ ', '\n')} language="bash" />
-            ) : (
-              <Text>{shown.target}</Text>
-            ))}
+          {out !== undefined && (
+            <Box flexDirection="column" marginTop={1}>
+              <Box flexDirection="row">
+                <Text color={outColor} dimColor={!isFailed}>
+                  {rule(summary.length > 0 ? `output · ${summary}` : 'output', columns - width(` [ ${flip} ]`))}{' '}
+                </Text>
+                {ring === 'output' ? (
+                  <Button {...output}>
+                    <Text color={FOCUS_COLOR}>{flip}</Text>
+                  </Button>
+                ) : (
+                  <Button {...output} />
+                )}
+              </Box>
+              {body !== undefined && (
+                <Box flexDirection="column">
+                  <Text color={outColor} dimColor={!isFailed}>
+                    {body.lines.join('\n')}
+                  </Text>
+                  {more.length > 0 && <Text dimColor>{more}</Text>}
+                </Box>
+              )}
+            </Box>
+          )}
         </Box>
       )
     }
 
-    if (list.length === 0) {
+    if (list.length === 0 && team.length === 0) {
       return (
         <Box flexDirection="column">
           <Text dimColor>No tool calls yet.</Text>
@@ -292,9 +546,10 @@ export const register: Register = on => {
       )
     }
 
+    const main = list.filter(call => call.agentId === undefined)
     const order: number[] = []
     const byTurn = new Map<number, TapeCall[]>()
-    for (const call of list) {
+    for (const call of main) {
       const group = byTurn.get(call.turn)
       if (group === undefined) {
         byTurn.set(call.turn, [call])
@@ -305,76 +560,148 @@ export const register: Register = on => {
     }
 
     const latest = order[order.length - 1]
-    const labelWidth = Math.max(...list.map(call => width(labelOfCall(call)))) + 1
-    const timeWidth = Math.max(1, ...list.map(call => width(timeOf(call))))
-    const room = Math.max(MIN_TARGET_WIDTH, columns - INDENT - GLYPH - labelWidth - 1 - timeWidth)
+    const labelWidth = Math.max(0, ...list.map(call => width(labelOfCall(call)))) + 1
+    const timeWidth = Math.max(1, ...list.map(call => width(timeOfRow(call))))
+    const roomAt = (indent: number) => Math.max(MIN_TARGET_WIDTH, columns - indent - GLYPH - labelWidth - 1 - timeWidth)
+    const isFailed = (call: TapeCall) => call.status === 'error' || call.status === 'denied'
 
-    const toggle = (n: number, isOpen: boolean) => async () => {
-      await update($, folds, now => ({ ...now, [String(n)]: !isOpen }))
-      await $.ui.focus({ requestId: PANE, key: `turn:${n}` }).catch(noop)
+    const toggle = (key: string, focus: string, isOpen: boolean) => async () => {
+      await update($, folds, was => ({ ...was, [key]: !isOpen }))
+      await $.ui.focus({ requestId: PANE, key: focus }).catch(noop)
     }
 
-    const renderCall = (call: TapeCall) => {
-      const icon = ICON[call.status]
+    const stops: string[] = []
+    const step = (by: number) => () => {
+      moving = moving.then(async () => {
+        const at = stops.indexOf((await read($, focused)) ?? '')
+        const to = stops[Math.max(0, Math.min(stops.length - 1, at < 0 ? 0 : at + by))]
+        if (to === undefined) return
+        const moved = await $.ui.focus({ requestId: PANE, key: to }).catch(() => ({ deny: 'gone' }))
+        if (moved.deny === undefined) await update($, focused, () => to)
+      }).catch(noop)
+      return moving
+    }
+    const jkKeys = (
+      <Box key="jk" display="none">
+        <Button key="jk:j" label="j" hotkey="j" onPress={step(1)} />
+        <Button key="jk:k" label="k" hotkey="k" onPress={step(-1)} />
+      </Box>
+    )
+    const stop = (key: string) => (stops.push(key) === 2 ? jkKeys : null) // inside the second row, so the ui.focus redirect can always step past them
+
+    const renderCall = (indent: number) => (call: TapeCall) => {
+      const jk = stop(call.id)
+      const icon = ICON[statusOf(call)]
       const isLit = ring === call.id
-      const target = clip(call.target, room)
+      const room = roomAt(indent)
+      const target = clip(targetOfRow(call), room)
       return (
-        <Box key={`row:${call.id}`} flexDirection="row" paddingLeft={INDENT}>
+        <Box key={`row:${call.id}`} flexDirection="row" paddingLeft={indent}>
+          {jk}
           <Button
             key={call.id}
             plain
             onPress={async () => {
+              await update($, expanded, () => false)
               await update($, open, () => call.id)
               await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
             }}
           >
             <Text {...ink(isLit, icon.color)}>{icon.glyph} </Text>
-            <Text bold={!call.isAgent} {...ink(isLit, undefined, call.isAgent)}>
+            <Text bold {...ink(isLit)}>
               {padEnd(labelOfCall(call), labelWidth)}
             </Text>
-            <Text {...ink(isLit, undefined, call.isAgent)}>{padEnd(target, room)}</Text>
+            <Text {...ink(isLit)}>{padEnd(target, room)}</Text>
             <Text mono {...ink(isLit, undefined, true)}>
               {' '}
-              {padStart(timeOf(call), timeWidth)}
+              {padStart(timeOfRow(call), timeWidth)}
             </Text>
           </Button>
         </Box>
       )
     }
 
-    return (
+    const running = team.filter(agent => agent.status === 'running').length
+    const crewNote = [running > 0 ? `${running} running` : '', team.length > running ? `${team.length - running} done` : '']
+      .filter(Boolean)
+      .join(' · ')
+    const crewHead = `── Agents · ${crewNote} `
+
+    const tree = (
       <Box flexDirection="column" width={e.props.bodyColumns}>
-        {order.reverse().map(n => {
+        {[...order].reverse().map(n => {
           const group = byTurn.get(n) ?? []
-          const failed = group.filter(call => call.status === 'error' || call.status === 'denied').length
-          const isOpen = folded[String(n)] ?? (n === latest || group.some(call => call.status === 'running'))
+          const isOpen = folded[String(n)] ?? (n === latest || group.some(call => statusOf(call) === 'running'))
           const isLit = ring === `turn:${n}`
+          const jk = stop(`turn:${n}`)
           const head = turnName(n)
           const note = ` · ${group.length} call${group.length === 1 ? '' : 's'}`
-          const fail = failed > 0 ? ` · ✗${failed}` : ''
+          const fail = failedNote(group.filter(isFailed).length, columns)
           const asked = known.find(t => t.n === n)?.prompt ?? ''
           const prompt =
             columns >= MIN_PROMPT_COLUMNS ? clip(asked, columns - GLYPH - width(head) - width(note) - width(fail) - 1) : ''
           return (
             <Box key={`turn-${n}`} flexDirection="column" marginBottom={1}>
               <Box flexDirection="row">
-                <Button key={`turn:${n}`} plain onPress={() => void toggle(n, isOpen)()}>
+                {jk}
+                <Button key={`turn:${n}`} plain onPress={() => void toggle(String(n), `turn:${n}`, isOpen)()}>
                   <Text {...ink(isLit, undefined, true)}>{isOpen ? '▾ ' : '▸ '}</Text>
                   <Text bold {...ink(isLit, 'claude')}>
                     {head}
                   </Text>
-                  <Text {...ink(isLit, undefined, true)}>{note}</Text>
-                  <Text {...ink(isLit, 'error')}>{fail}</Text>
+                  <Text {...ink(isLit, undefined, true)}>
+                    {note}
+                    {fail}
+                  </Text>
                   <Text italic {...ink(isLit, undefined, true)}>
                     {prompt.length > 0 ? ` ${prompt}` : ''}
                   </Text>
                 </Button>
               </Box>
-              {isOpen && [...group].reverse().map(renderCall)}
+              {isOpen && [...group].reverse().map(renderCall(INDENT))}
+            </Box>
+          )
+        })}
+        {team.length > 0 && <Text dimColor>{crewHead + '─'.repeat(Math.max(0, columns - width(crewHead)))}</Text>}
+        {[...team].reverse().map(agent => {
+          const key = `agent:${agent.id}`
+          const jk = stop(key)
+          const own = list.filter(call => call.agentId === agent.id)
+          const isOpen = folded[key] ?? agent.status === 'running'
+          const isLit = ring === key
+          const icon = ICON[agent.status]
+          const name = nameOf(agent)
+          const about = agent.description.length > 0 ? ` · ${agent.description}` : ''
+          const info = [spanOf(agent), `${own.length} call${own.length === 1 ? '' : 's'}`].join(' · ')
+          const fail = failedNote(own.filter(isFailed).length, columns)
+          return (
+            <Box key={`agent-${agent.id}`} flexDirection="column" marginBottom={1}>
+              <Box flexDirection="row">
+                {jk}
+                <Button key={key} plain onPress={() => void toggle(key, key, isOpen)()}>
+                  <Text {...ink(isLit, undefined, true)}>{isOpen ? '▾ ' : '▸ '}</Text>
+                  <Text {...ink(isLit, icon.color)}>{icon.glyph} </Text>
+                  <Text bold {...ink(isLit, 'claude')}>
+                    {name}
+                  </Text>
+                  <Text italic {...ink(isLit, undefined, true)}>
+                    {clip(about, columns - GLYPH * 2 - width(name))}
+                  </Text>
+                </Button>
+              </Box>
+              <Box flexDirection="row" paddingLeft={GLYPH * 2}>
+                <Text dimColor>
+                  {info}
+                  {fail} · {lengthOf(agent)}
+                </Text>
+              </Box>
+              {isOpen && [...own].reverse().map(renderCall(INDENT * 2))}
             </Box>
           )
         })}
       </Box>
     )
+    shownStops = stops
+    return tree
   })
 }

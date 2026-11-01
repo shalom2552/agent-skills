@@ -9,46 +9,98 @@ export const BADGES: Record<string, string> = {
   'system-audit': 'AUDIT',
 }
 
-const SESSIONS = 'sessions'
-const MAX_SESSIONS = 20
+const SESSIONS_KEY = 'sessions'
+const SKILLS_PREFIX = 'skills:'
+const MAX_SESSIONS = 50
+const STORE_VERSION = 1
+const SWITCH_POLL_MS = 200
+const SWITCH_POLLS = 25
+
+type Engine = EngineInterface
 
 const active = atom({ plugin: 'badges', key: 'active' } as const, [] as Active)
 
 export const skillsOf = (raw: unknown): Active =>
   Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && BADGES[s] !== undefined) : []
 
-const savedOf = (raw: unknown): Record<string, unknown> =>
-  typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {}
+export const storedSkillsOf = (raw: unknown): Active =>
+  typeof raw === 'object' && raw !== null && Reflect.get(raw, 'version') === STORE_VERSION ? skillsOf(Reflect.get(raw, 'skills')) : []
 
-const save = async ($: EngineInterface, list: Active) => {
-  const id = await $.session.id()
-  const saved = savedOf(await $.store.get(SESSIONS))
-  delete saved[id]
-  const kept = Object.entries(saved).slice(1 - MAX_SESSIONS)
-  await $.store.set(SESSIONS, Object.fromEntries(list.length === 0 ? kept : [...kept, [id, list]]))
+const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
+const noop = () => undefined
+
+export const keptSessionsOf = (raw: unknown, id: string) =>
+  [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
+
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
+  const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
+  }
+  await $.store.set(SESSIONS_KEY, kept)
+  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
-const restore = async ($: EngineInterface) => {
-  const list = skillsOf(savedOf(await $.store.get(SESSIONS))[await $.session.id()])
-  if (list.length > 0) await update($, active, () => list)
+let saving: Promise<unknown> = Promise.resolve()
+let sessionId: string | undefined
+
+function save($: EngineInterface) {
+  saving = saving.then(async () => {
+    const id = await settled($.session.id())
+    if (id !== undefined) await settled(persist($, SKILLS_PREFIX, id, { skills: await read($, active) }))
+  })
+  return saving
+}
+
+const restore = async ($: Engine) => {
+  const id = await settled($.session.id())
+  if (id === undefined || id === sessionId) return
+  sessionId = id
+  const list = storedSkillsOf(await settled($.store.get(SKILLS_PREFIX + id)))
+  await update($, active, () => list)
+}
+
+function ensure($: Engine) {
+  saving = saving.then(() => restore($)).catch(noop)
+  return saving
+}
+
+function followSwitch($: Engine, endedId: string) {
+  let polls = 0
+  const timer = $.clock.every(SWITCH_POLL_MS, () => {
+    polls += 1
+    void $.session
+      .id()
+      .then(async id => {
+        if (id === endedId && polls < SWITCH_POLLS) return
+        timer.cancel()
+        if (id !== endedId) await ensure($)
+      })
+      .catch(noop)
+  })
 }
 
 const set = async ($: EngineInterface, next: (list: Active) => Active) => {
   await update($, active, next)
-  await save($, await read($, active)).catch(() => undefined)
+  await save($)
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await restore($).catch(() => undefined)
+    await ensure($)
 
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear' || e.reason === 'resume') await update($, active, () => [])
+    const ended = await next(e)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await ensure($)
+      if (sessionId === e.sessionId) followSwitch($, e.sessionId)
+    }
 
-    return next(e)
+    return ended
   })
 
   on('skill.prompt', { skill: Object.keys(BADGES) }, async ($, e, next) => {
@@ -68,7 +120,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box gap={1}>
           {list.flatMap(skill => [
-            <Text bold inverse color="permission" key={`badge:${skill}`}>
+            <Text bold inverse color="merged" key={`badge:${skill}`}>
               {` ${BADGES[skill]} `}
             </Text>,
             ...(e.props.isWorking

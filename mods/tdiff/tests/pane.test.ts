@@ -40,6 +40,7 @@ function inline(node: unknown): string {
   if (typeof node !== 'object' || node === null) return ''
   const props = (Reflect.get(node, 'props') ?? {}) as Record<string, unknown>
   const children = (Reflect.get(node, 'children') ?? []) as unknown[]
+  if (Reflect.get(node, 'type') === 'Box' && props.display === 'none') return ''
   if (Reflect.get(node, 'type') === 'Button' && children.length === 0) return `[ ${String(props.label)} ] `
   return inline(children)
 }
@@ -81,8 +82,8 @@ for (const surface of SURFACES) {
         '~/proj',
         '▾ src/',
         '    M app.ts +2 -1',
-        '    A new.ts edited since +1 -0',
-        '  A logo.bin no text diff',
+        '    A✎ new.ts +1 -0',
+        '  A logo.bin binary',
         'Elsewhere',
         '▾ /opt/other/',
         '    A x.txt +1 -0',
@@ -91,16 +92,18 @@ for (const surface of SURFACES) {
       ])
       const raw = screen(await ui.drawn())
       expect(raw[3]?.endsWith(' +2 -1')).toBe(true)
-      expect(raw[5]?.endsWith(' no text diff')).toBe(true)
+      expect(raw[5]?.endsWith(' binary')).toBe(true)
       expect(await ui.find({ type: 'Text', text: /^\+3$/ })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /^\+2$/ }))?.props.color).toBe('success')
 
       const colorOf = async (text: string) => (await ui.findAll({ type: 'Text' })).find(one => one.text === text)?.props
+      expect((await colorOf('✎'))?.color).toBe('warning')
+      expect((await ui.findAll({ type: 'Text' })).find(one => one.text.trim() === 'binary')?.props.dimColor).toBe(true)
       expect((await colorOf('app.ts'))?.bold).toBe(true)
       expect((await colorOf('~/proj'))?.color).toBe('claude')
-      expect((await colorOf('Elsewhere'))?.color).toBe('suggestion')
-      expect((await colorOf('/opt/other/'))?.color).toBe('claude')
-      expect((await colorOf('~/.config/'))?.color).toBe('claude')
+      expect((await colorOf('Elsewhere'))?.color).toBe('ide')
+      expect((await colorOf('/opt/other/'))?.color).toBe('ide')
+      expect((await colorOf('~/.config/'))?.color).toBe('ide')
       expect((await colorOf('src/'))?.color).toBeUndefined()
       expect((await colorOf('tool.conf'))?.color).toBeUndefined()
       expect((await colorOf('x.txt'))?.color).toBeUndefined()
@@ -164,7 +167,7 @@ for (const surface of SURFACES) {
       for (let i = 0; i < 270; i++) await $.tool.call({ tool: 'Write', file_path: `${w.root}/f${String(i).padStart(3, '0')}.ts`, content: 'x\n' })
 
       const ui = await $.ui.mount(pane(surface))
-      expect(await ui.findAll({ type: 'Button' })).toHaveLength(250)
+      expect((await ui.findAll({ type: 'Button' })).filter(one => !String(one.key).startsWith('jk:'))).toHaveLength(250)
       expect((await view(ui)).at(-1)).toBe('20 more rows, collapse some folders.')
       await ui.unmount()
     })
@@ -203,6 +206,30 @@ for (const surface of SURFACES) {
       await ui.unmount()
     })
 
+    test('flags stay compact so names still show at 24 columns', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      await $.session.start({ cwd: w.root, ...START })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/notes.txt`, content: 'claude\n' })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/logo.png`, content: 'a\0b' })
+      w.put(`${w.root}/dump.sql`, 'x', 5 * 1024 * 1024)
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/dump.sql`, content: 'y' })
+      w.put(`${w.root}/dump.sql`, 'y', 6 * 1024 * 1024)
+      await $.turn.complete(DONE)
+      await w.clock.advance(1_000)
+      w.put(`${w.root}/notes.txt`, 'mine\n')
+      await $.turn.complete(DONE)
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, bodyColumns: 24 } })
+      const rows = screen(await ui.drawn()).filter(line => /^ *[AMD]/.test(line))
+      expect(rows.map(line => line.trimEnd().replace(/(\S) +/g, '$1 '))).toEqual([
+        '  M✎ dump.sql too large',
+        '  A logo.png binary',
+        '  A✎ notes.txt +1 -0',
+      ])
+      for (const line of rows) expect(Array.from(line).length).toBeLessThanOrEqual(24)
+      await ui.unmount()
+    })
+
     test('names truncate in the middle to fit the row', async ($, on) => {
       const w = world(on, { isStateLive: true })
       const name = 'a-very-long-file-name-that-will-not-fit-here.ts'
@@ -214,6 +241,45 @@ for (const surface of SURFACES) {
       expect((await ui.find({ type: 'Text', text: /^a-very.*…/ }))?.props.wrap).toBe('truncate-middle')
       expect((await ui.find({ type: 'Text', text: 'deep/' }))?.props.wrap).toBe('truncate-middle')
       expect(Reflect.get(await ui.drawn(), 'props')).toEqual(expect.objectContaining({ width: 40 }))
+      await ui.unmount()
+    })
+
+    test('j and k are hidden hotkeys between the first two rows', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      await $.session.start({ cwd: w.root, ...START })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/f1.ts`, content: 'x\n' })
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, isFocused: true } })
+      expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/f2.ts`, content: 'x\n' })
+      expect((await ui.find({ type: 'Button', key: 'jk:j' }))?.props.hotkey).toBe('j')
+      expect((await ui.find({ type: 'Button', key: 'jk:k' }))?.props.hotkey).toBe('k')
+      expect((await ui.find({ type: 'Box', key: 'jk' }))?.props.display).toBe('none')
+      const keys = (await ui.findAll({ type: 'Button' })).map(one => one.key)
+      expect(keys).toEqual([`${w.root}/f1.ts`, 'jk:j', 'jk:k', `${w.root}/f2.ts`])
+      expect(await view(ui)).toEqual(['2 files +2 -0', w.root, '  A f1.ts +1 -0', '  A f2.ts +1 -0'])
+
+      await ui.press({ key: `${w.root}/f1.ts` })
+      expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+      await ui.unmount()
+    })
+
+    test('the arrows skip the hidden j and k stops', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      on('ui.focus', () => ({}))
+      await $.session.start({ cwd: w.root, ...START })
+      for (const name of ['f1', 'f2', 'f3']) await $.tool.call({ tool: 'Write', file_path: `${w.root}/${name}.ts`, content: 'x\n' })
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, isFocused: true } })
+      const lit = async () =>
+        (await ui.findAll({ type: 'Text', text: /^f\d\.ts$/ })).find(one => one.props.color === 'suggestion')?.text
+      const arrow = (element: string) =>
+        $.ui.focus({ component: 'Pane', requestId: 'tdiff', plugin: 'tdiff', element, origin: { kind: 'person' } })
+      await arrow(`${w.root}/f1.ts`)
+      await arrow('jk:j')
+      expect(await lit()).toBe('f2.ts')
+      await arrow('jk:k')
+      expect(await lit()).toBe('f1.ts')
       await ui.unmount()
     })
 
