@@ -396,7 +396,7 @@ describe('register', () => {
     expect(headOf('a')).toEqual({ more: 0, lines: ['a'] })
   })
 
-  test('a call shows its output folded, a press shows it whole up to the cap', async ($, on) => {
+  test('a call shows its output whole up to the cap, a press folds it', async ($, on) => {
     const w = world(on)
     on('tool.call', () => ({ result: 'ran' }))
     await $.session.start(SESSION)
@@ -409,25 +409,25 @@ describe('register', () => {
     let text = textOf(await ui.drawn())
     expect(text).toContain('── command ─')
     expect(text).toContain('── output · 2045 lines ─')
-    expect(text).not.toContain('L1.')
     let toggle = await ui.find({ type: 'Button', key: 'output' })
     expect(toggle?.props.hotkey).toBe('o')
-    expect(toggle?.props.label).toBe('show')
-    expect(toggle?.props.plain).toBeUndefined()
-
-    await ui.press({ key: 'output' })
-    text = textOf(await ui.drawn())
-    expect(text).toContain('── output · 2045 lines ─')
-    toggle = await ui.find({ type: 'Button', key: 'output' })
     expect(toggle?.props.label).toBe('hide')
+    expect(toggle?.props.plain).toBeUndefined()
     expect(text).toContain('L1.\nL2.')
     expect(text).toContain('L2000.')
     expect(text).not.toContain('L2001.')
     expect(text.endsWith('… +45 more lines')).toBe(true)
 
+    await ui.press({ key: 'output' })
+    text = textOf(await ui.drawn())
+    expect(text).toContain('── output · 2045 lines ─')
+    toggle = await ui.find({ type: 'Button', key: 'output' })
+    expect(toggle?.props.label).toBe('show')
+    expect(text).not.toContain('L1.')
+
     await ui.press({ key: 'back' })
     await ui.press({ key: 'c1' })
-    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.label).toBe('show')
+    expect((await ui.find({ type: 'Button', key: 'output' }))?.props.label).toBe('hide')
     await ui.unmount()
   })
 
@@ -451,7 +451,7 @@ describe('register', () => {
       const command = texts.find(one => textOf(one).startsWith('── command'))
       expect(Array.from(textOf(command)).length).toBe(columns)
       const head = texts.find(one => textOf(one).startsWith('── output'))
-      expect(Array.from(`${textOf(head)}[ show ]`).length).toBe(columns)
+      expect(Array.from(`${textOf(head)}[ hide ]`).length).toBe(columns)
       await ui.press({ key: 'back' })
       await ui.unmount()
     }
@@ -468,7 +468,6 @@ describe('register', () => {
 
     const ui = await $.ui.mount(MOUNT)
     await ui.press({ key: 'c1' })
-    await ui.press({ key: 'output' })
     const text = textOf(await ui.drawn())
     expect(text).toContain('output · exit 2')
     expect(text).toContain('boom')
@@ -494,7 +493,6 @@ describe('register', () => {
     const ui = await $.ui.mount(MOUNT)
     await ui.press({ key: 'u1' })
     expect(textOf(await ui.drawn())).toContain('── output · done · 0.0s · 1 call ─')
-    await ui.press({ key: 'output' })
     const text = textOf(await ui.drawn())
     expect(text).toContain('found two bugs')
     expect(text).not.toContain('launched')

@@ -34,7 +34,7 @@ const agents = atom({ plugin: 'tape', key: 'agents' } as const, [])
 const folds = atom({ plugin: 'tape', key: 'folds' } as const, {})
 const focused = atom({ plugin: 'tape', key: 'focused' } as const, null)
 const open = atom({ plugin: 'tape', key: 'open' } as const, null)
-const expanded = atom({ plugin: 'tape', key: 'expanded' } as const, false)
+const expanded = atom({ plugin: 'tape', key: 'expanded' } as const, true)
 
 const ICON: Record<TapeStatus, { glyph: string; color: string }> = {
   running: { glyph: '●', color: 'warning' },
@@ -208,7 +208,7 @@ async function adopt($: Engine, id: string) {
   await update($, agents, () => savedAgents)
   await update($, folds, () => ({}))
   await update($, open, () => null)
-  await update($, expanded, () => false)
+  await update($, expanded, () => true)
 }
 
 async function sync($: Engine) {
@@ -602,7 +602,7 @@ export const register: Register = on => {
             key={call.id}
             plain
             onPress={async () => {
-              await update($, expanded, () => false)
+              await update($, expanded, () => true)
               await update($, open, () => call.id)
               await $.ui.focus({ requestId: PANE, key: 'back' }).catch(noop)
             }}
