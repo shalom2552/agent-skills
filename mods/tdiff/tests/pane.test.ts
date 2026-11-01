@@ -40,6 +40,7 @@ function inline(node: unknown): string {
   if (typeof node !== 'object' || node === null) return ''
   const props = (Reflect.get(node, 'props') ?? {}) as Record<string, unknown>
   const children = (Reflect.get(node, 'children') ?? []) as unknown[]
+  if (Reflect.get(node, 'type') === 'Box' && props.display === 'none') return ''
   if (Reflect.get(node, 'type') === 'Button' && children.length === 0) return `[ ${String(props.label)} ] `
   return inline(children)
 }
@@ -166,7 +167,7 @@ for (const surface of SURFACES) {
       for (let i = 0; i < 270; i++) await $.tool.call({ tool: 'Write', file_path: `${w.root}/f${String(i).padStart(3, '0')}.ts`, content: 'x\n' })
 
       const ui = await $.ui.mount(pane(surface))
-      expect(await ui.findAll({ type: 'Button' })).toHaveLength(250)
+      expect((await ui.findAll({ type: 'Button' })).filter(one => !String(one.key).startsWith('jk:'))).toHaveLength(250)
       expect((await view(ui)).at(-1)).toBe('20 more rows, collapse some folders.')
       await ui.unmount()
     })
@@ -240,6 +241,45 @@ for (const surface of SURFACES) {
       expect((await ui.find({ type: 'Text', text: /^a-very.*…/ }))?.props.wrap).toBe('truncate-middle')
       expect((await ui.find({ type: 'Text', text: 'deep/' }))?.props.wrap).toBe('truncate-middle')
       expect(Reflect.get(await ui.drawn(), 'props')).toEqual(expect.objectContaining({ width: 40 }))
+      await ui.unmount()
+    })
+
+    test('j and k are hidden hotkeys between the first two rows', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      await $.session.start({ cwd: w.root, ...START })
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/f1.ts`, content: 'x\n' })
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, isFocused: true } })
+      expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+      await $.tool.call({ tool: 'Write', file_path: `${w.root}/f2.ts`, content: 'x\n' })
+      expect((await ui.find({ type: 'Button', key: 'jk:j' }))?.props.hotkey).toBe('j')
+      expect((await ui.find({ type: 'Button', key: 'jk:k' }))?.props.hotkey).toBe('k')
+      expect((await ui.find({ type: 'Box', key: 'jk' }))?.props.display).toBe('none')
+      const keys = (await ui.findAll({ type: 'Button' })).map(one => one.key)
+      expect(keys).toEqual([`${w.root}/f1.ts`, 'jk:j', 'jk:k', `${w.root}/f2.ts`])
+      expect(await view(ui)).toEqual(['2 files +2 -0', w.root, '  A f1.ts +1 -0', '  A f2.ts +1 -0'])
+
+      await ui.press({ key: `${w.root}/f1.ts` })
+      expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+      await ui.unmount()
+    })
+
+    test('the arrows skip the hidden j and k stops', async ($, on) => {
+      const w = world(on, { isStateLive: true })
+      on('ui.focus', () => ({}))
+      await $.session.start({ cwd: w.root, ...START })
+      for (const name of ['f1', 'f2', 'f3']) await $.tool.call({ tool: 'Write', file_path: `${w.root}/${name}.ts`, content: 'x\n' })
+
+      const ui = await $.ui.mount({ ...pane(surface), props: { ...pane(surface).props, isFocused: true } })
+      const lit = async () =>
+        (await ui.findAll({ type: 'Text', text: /^f\d\.ts$/ })).find(one => one.props.color === 'suggestion')?.text
+      const arrow = (element: string) =>
+        $.ui.focus({ component: 'Pane', requestId: 'tdiff', plugin: 'tdiff', element, origin: { kind: 'person' } })
+      await arrow(`${w.root}/f1.ts`)
+      await arrow('jk:j')
+      expect(await lit()).toBe('f2.ts')
+      await arrow('jk:k')
+      expect(await lit()).toBe('f1.ts')
       await ui.unmount()
     })
 

@@ -55,6 +55,9 @@ const MAX_ROWS = 250
 const CHAR_BUDGET = 60_000
 const ROW_COST = 200
 
+let shownStops: string[] = []
+let moving: Promise<unknown> = Promise.resolve()
+
 const noop = () => undefined
 const width = (text: string) => Array.from(text).length
 const padStart = (text: string, room: number) => ' '.repeat(Math.max(0, room - width(text))) + text
@@ -95,7 +98,13 @@ export function registerPane(on: On) {
     return { text: opened.isPlaced ? 'Tdiff opened.' : `Tdiff is waiting: ${opened.reason}` }
   })
 
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+  on('ui.focus', { requestId: PANE }, async ($, raw, next) => {
+    let e = raw
+    if (e.element?.startsWith('jk:')) {
+      const to = (await read($, focused)) === shownStops[0] ? shownStops[1] : shownStops[0]
+      if (to === undefined) return {}
+      e = { ...e, element: to }
+    }
     const moved = await next(e)
     if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
     return moved
@@ -244,8 +253,28 @@ export function registerPane(on: On) {
       await $.ui.focus({ requestId: PANE, key: `dir:${key}` }).catch(noop)
     }
 
+    const stops: string[] = []
+    const step = (by: number) => () => {
+      moving = moving.then(async () => {
+        const at = stops.indexOf((await read($, focused)) ?? '')
+        const to = stops[Math.max(0, Math.min(stops.length - 1, at < 0 ? 0 : at + by))]
+        if (to === undefined) return
+        const moved = await $.ui.focus({ requestId: PANE, key: to }).catch(() => ({ deny: 'gone' }))
+        if (moved.deny === undefined) await update($, focused, () => to)
+      }).catch(noop)
+      return moving
+    }
+    const jkKeys = (
+      <Box key="jk" display="none">
+        <Button key="jk:j" label="j" hotkey="j" onPress={step(1)} />
+        <Button key="jk:k" label="k" hotkey="k" onPress={step(-1)} />
+      </Box>
+    )
+    const stop = (key: string) => (stops.push(key) === 2 ? jkKeys : null) // inside the second row, so the ui.focus redirect can always step past them
+
     const TreeRow = ({ line, topColor }: { line: Line; topColor: string | undefined }) => {
       const indent = line.depth * INDENT
+      const jk = stop(line.node.kind === 'dir' ? `dir:${line.node.key}` : line.node.row.path)
       if (line.node.kind === 'dir') {
         const dir = line.node
         const isLit = ring === `dir:${dir.key}`
@@ -255,6 +284,7 @@ export function registerPane(on: On) {
         const name = middle(dir.name, columns - indent - GLYPH - width(note) - tail)
         return (
           <Box key={`row:${dir.key}`} flexDirection="row" paddingLeft={indent}>
+            {jk}
             <Button key={`dir:${dir.key}`} plain onPress={() => void toggle(dir.key, dir.count)()}>
               <Text {...ink(isLit, undefined, true)}>{isCollapsed ? '▸ ' : '▾ '}</Text>
               <Text {...ink(isLit, line.depth === 0 ? topColor : undefined)} wrap="truncate-middle">
@@ -278,6 +308,7 @@ export function registerPane(on: On) {
       const name = middle(line.node.name, columns - indent - GLYPH - slot - right)
       return (
         <Box key={`row:${row.path}`} flexDirection="row" paddingLeft={indent}>
+          {jk}
           <Button
             key={row.path}
             plain
@@ -310,7 +341,7 @@ export function registerPane(on: On) {
       )
     }
 
-    return (
+    const tree = (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         <Box flexDirection="row">
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -339,5 +370,7 @@ export function registerPane(on: On) {
         {footer}
       </Box>
     )
+    shownStops = stops
+    return tree
   })
 }
