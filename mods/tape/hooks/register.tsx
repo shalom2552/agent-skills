@@ -170,6 +170,8 @@ type Engine = Pick<CoreEngineInterface, 'state' | 'store' | 'session' | 'clock'>
 type Live = { turn: number; sessionId?: string; queue: Promise<unknown> }
 
 const live: Live = { turn: 0, queue: Promise.resolve() }
+let shownStops: string[] = []
+let moving: Promise<unknown> = Promise.resolve()
 
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
 
@@ -365,7 +367,13 @@ export const register: Register = on => {
     }
   })
 
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+  on('ui.focus', { requestId: PANE }, async ($, raw, next) => {
+    let e = raw
+    if (e.element?.startsWith('jk:')) {
+      const to = (await read($, focused)) === shownStops[0] ? shownStops[1] : shownStops[0]
+      if (to === undefined) return {}
+      e = { ...e, element: to }
+    }
     const moved = await next(e)
     if (moved.deny === undefined) await update($, focused, () => e.element ?? null)
     return moved
@@ -562,13 +570,34 @@ export const register: Register = on => {
       await $.ui.focus({ requestId: PANE, key: focus }).catch(noop)
     }
 
+    const stops: string[] = []
+    const step = (by: number) => () => {
+      moving = moving.then(async () => {
+        const at = stops.indexOf((await read($, focused)) ?? '')
+        const to = stops[Math.max(0, Math.min(stops.length - 1, at < 0 ? 0 : at + by))]
+        if (to === undefined) return
+        const moved = await $.ui.focus({ requestId: PANE, key: to }).catch(() => ({ deny: 'gone' }))
+        if (moved.deny === undefined) await update($, focused, () => to)
+      }).catch(noop)
+      return moving
+    }
+    const jkKeys = (
+      <Box key="jk" display="none">
+        <Button key="jk:j" label="j" hotkey="j" onPress={step(1)} />
+        <Button key="jk:k" label="k" hotkey="k" onPress={step(-1)} />
+      </Box>
+    )
+    const stop = (key: string) => (stops.push(key) === 2 ? jkKeys : null) // inside the second row, so the ui.focus redirect can always step past them
+
     const renderCall = (indent: number) => (call: TapeCall) => {
+      const jk = stop(call.id)
       const icon = ICON[statusOf(call)]
       const isLit = ring === call.id
       const room = roomAt(indent)
       const target = clip(targetOfRow(call), room)
       return (
         <Box key={`row:${call.id}`} flexDirection="row" paddingLeft={indent}>
+          {jk}
           <Button
             key={call.id}
             plain
@@ -598,12 +627,13 @@ export const register: Register = on => {
       .join(' · ')
     const crewHead = `── Agents · ${crewNote} `
 
-    return (
+    const tree = (
       <Box flexDirection="column" width={e.props.bodyColumns}>
         {[...order].reverse().map(n => {
           const group = byTurn.get(n) ?? []
           const isOpen = folded[String(n)] ?? (n === latest || group.some(call => statusOf(call) === 'running'))
           const isLit = ring === `turn:${n}`
+          const jk = stop(`turn:${n}`)
           const head = turnName(n)
           const note = ` · ${group.length} call${group.length === 1 ? '' : 's'}`
           const fail = failedNote(group.filter(isFailed).length, columns)
@@ -613,6 +643,7 @@ export const register: Register = on => {
           return (
             <Box key={`turn-${n}`} flexDirection="column" marginBottom={1}>
               <Box flexDirection="row">
+                {jk}
                 <Button key={`turn:${n}`} plain onPress={() => void toggle(String(n), `turn:${n}`, isOpen)()}>
                   <Text {...ink(isLit, undefined, true)}>{isOpen ? '▾ ' : '▸ '}</Text>
                   <Text bold {...ink(isLit, 'claude')}>
@@ -634,6 +665,7 @@ export const register: Register = on => {
         {team.length > 0 && <Text dimColor>{crewHead + '─'.repeat(Math.max(0, columns - width(crewHead)))}</Text>}
         {[...team].reverse().map(agent => {
           const key = `agent:${agent.id}`
+          const jk = stop(key)
           const own = list.filter(call => call.agentId === agent.id)
           const isOpen = folded[key] ?? agent.status === 'running'
           const isLit = ring === key
@@ -645,6 +677,7 @@ export const register: Register = on => {
           return (
             <Box key={`agent-${agent.id}`} flexDirection="column" marginBottom={1}>
               <Box flexDirection="row">
+                {jk}
                 <Button key={key} plain onPress={() => void toggle(key, key, isOpen)()}>
                   <Text {...ink(isLit, undefined, true)}>{isOpen ? '▾ ' : '▸ '}</Text>
                   <Text {...ink(isLit, icon.color)}>{icon.glyph} </Text>
@@ -668,5 +701,7 @@ export const register: Register = on => {
         })}
       </Box>
     )
+    shownStops = stops
+    return tree
   })
 }

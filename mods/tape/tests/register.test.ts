@@ -120,6 +120,48 @@ describe('register', () => {
     expect(clip('abc', 0)).toBe('')
   })
 
+  test('j and k are hidden hotkeys between the first two rows', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+
+    const ui = await $.ui.mount(MOUNT)
+    await $.tool.call({ tool: 'Bash', command: 'ls a', tool_use_id: 'c1' } as never)
+    expect((await ui.find({ type: 'Button', key: 'jk:j' }))?.props.hotkey).toBe('j')
+    expect((await ui.find({ type: 'Button', key: 'jk:k' }))?.props.hotkey).toBe('k')
+    expect((await ui.find({ type: 'Box', key: 'jk' }))?.props.display).toBe('none')
+    expect((await ui.findAll({ type: 'Button' })).map(one => one.key)).toEqual(['turn:1', 'jk:j', 'jk:k', 'c1'])
+
+    await ui.press({ key: 'turn:1' })
+    expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+    await ui.press({ key: 'turn:1' })
+    await ui.press({ key: 'c1' })
+    expect(await ui.find({ type: 'Button', key: 'jk:j' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('the arrows skip the hidden j and k stops', async ($, on) => {
+    world(on)
+    on('tool.call', () => ({ result: 'ran' }))
+    on('ui.focus', () => ({}))
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.tool.call({ tool: 'Bash', command: 'ls a', tool_use_id: 'c1' } as never)
+
+    const ui = await $.ui.mount(MOUNT)
+    const lit = async () =>
+      (await ui.findAll({ type: 'Text' })).find(one => one.props.color === 'suggestion' && one.text.trim().length > 1)?.text.trim()
+    const arrow = (element: string) =>
+      $.ui.focus({ component: 'Pane', requestId: 'tape', plugin: 'tape', element, origin: { kind: 'person' } })
+    await arrow('turn:1')
+    await arrow('jk:j')
+    expect(await lit()).toBe('ls a')
+    await arrow('jk:k')
+    expect(await lit()).toBe('Turn 1')
+    await ui.unmount()
+  })
+
   test('a long command clips to one row, a press opens it whole, back returns', async ($, on) => {
     world(on)
     on('tool.call', () => ({ result: 'ran' }))
@@ -129,7 +171,7 @@ describe('register', () => {
     await $.tool.call({ tool: 'Bash', command: `cd /work && echo ${words.join(' ')}\nls` })
 
     const ui = await $.ui.mount(MOUNT)
-    const row = (await ui.findAll({ type: 'Button' })).find(one => one.key?.startsWith('turn:') === false)
+    const row = (await ui.findAll({ type: 'Button' })).find(one => !/^(turn|jk):/.test(one.key ?? ''))
     expect(textOf(row)).toContain('✓ $')
     expect(textOf(row)).toContain('echo w0')
     expect(textOf(row)).toContain('…')
