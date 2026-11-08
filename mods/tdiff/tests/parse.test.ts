@@ -13,6 +13,7 @@ describe('command text variables', () => {
   test('braced and double-quoted references resolve', () => {
     expect(paths('d=/tmp/x && echo hi > "$d/notes.txt" && cp a ${d}/logo.bin')).toEqual([
       '/tmp/x/logo.bin',
+      '/tmp/x/logo.bin/a',
       '/tmp/x/notes.txt',
     ])
   })
@@ -45,6 +46,36 @@ describe('command text variables', () => {
 
   test('a variable prefixed to one command does not leak into its own arguments', () => {
     expect(paths('d=/tmp/x cp a $d/f')).toEqual([])
+  })
+})
+
+describe('copy and move into a folder', () => {
+  test('a trailing slash puts each source inside', () => {
+    expect(paths('N=~/.local/share/notes/config; mv INDEX.md "$N"/')).toEqual([
+      '/home/test/.local/share/notes/config/INDEX.md',
+      '/work/app/INDEX.md',
+    ])
+    expect(paths('cp src/a.txt b.txt /tmp/out/')).toEqual(['/tmp/out/a.txt', '/tmp/out/b.txt'])
+  })
+
+  test('a bare destination may be a file or a folder', () => {
+    expect(paths('cp a.txt /tmp/out')).toEqual(['/tmp/out', '/tmp/out/a.txt'])
+  })
+
+  test('target directory flags', () => {
+    expect(paths('mv -t /tmp/out a b')).toEqual(['/tmp/out/a', '/tmp/out/b', '/work/app/a', '/work/app/b'])
+    expect(paths('cp --target-directory=/tmp/out a')).toEqual(['/tmp/out/a'])
+    expect(paths('cp -T a /tmp/out')).toEqual(['/tmp/out'])
+  })
+
+  test('landed files win over sources under the path cap', () => {
+    const names = Array.from({ length: 30 }, (_, i) => `f${i}`)
+    const landed = names.map(name => `/tmp/out/${name}`)
+    const found = paths(`mv ${names.join(' ')} /tmp/out/`)
+    expect(found).toHaveLength(50)
+    expect(landed.filter(path => !found.includes(path))).toEqual([])
+    const viaFlag = paths(`mv -t /tmp/out ${names.join(' ')}`)
+    expect(landed.filter(path => !viaFlag.includes(path))).toEqual([])
   })
 })
 
