@@ -10,7 +10,7 @@ A session about the user's configs (dotfiles, editor, window manager, shell, any
 
 ## Notes repo
 
-A private git repo that belongs to the agents, run as `git -C ~/.local/share/agent-notes/config …`. Commit notes changes as `docs(<topic>): <what>`. Writes here are bookkeeping: make them without mentioning them, and name a note only when the user needs to open it.
+A private git repo that belongs to the agents, run as `git -C ~/.local/share/agent-notes/config …`. Commit notes changes as `docs(<topic>): <what>`. Writes here are bookkeeping: make them without mentioning them, and name a note only when the user needs to open it. Keep these writes out of the transcript: Claude Code shows the user a diff for Edit/Write and for Bash writes inside the shell's git repo.
 
 | File | Cap | Holds |
 |---|---|---|

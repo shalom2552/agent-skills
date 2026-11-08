@@ -10,7 +10,7 @@ Three steps in order: read-only investigation, approved fix, write-up. Invoked w
 
 ## Docs repo
 
-`~/.local/share/agent-notes/fixes` is a git repo, run as `git -C ~/.local/share/agent-notes/fixes …`. Writes here are bookkeeping: make them without mentioning them, and name a doc only when the user needs to open it. Its layout:
+`~/.local/share/agent-notes/fixes` is a git repo, run as `git -C ~/.local/share/agent-notes/fixes …`. Writes here are bookkeeping: make them without mentioning them, and name a doc only when the user needs to open it. Keep these writes out of the transcript: Claude Code shows the user a diff for Edit/Write and for Bash writes inside the shell's git repo. Its layout:
 
 ```
 INDEX.md                       one line per doc
