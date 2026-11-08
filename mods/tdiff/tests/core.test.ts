@@ -558,6 +558,22 @@ describe('hardening', () => {
     expect(w.rows().map(row => row.path)).toEqual(['/elsewhere/out.txt'])
   })
 
+  test('a move or copy into an outside folder lists the files that land there', async ($, on) => {
+    const w = world(on, { git: 'missing' })
+    const notes = `${w.home}/.local/share/agent-notes/config`
+    w.put(`${notes}/log.md`, 'old\n')
+    await $.session.start({ cwd: w.root, ...START })
+    w.bash.effect = () => {
+      w.put(`${notes}/INDEX.md`, 'new\n')
+      w.put(`${notes}/log.md`, 'new\n')
+    }
+    await $.tool.call({ tool: 'Bash', command: 'N=~/.local/share/agent-notes/config; mv INDEX.md "$N"/ && cp log.md $N' })
+    expect(w.rows().map(row => [row.path, row.kind]).sort()).toEqual([
+      [`${notes}/INDEX.md`, 'added'],
+      [`${notes}/log.md`, 'modified'],
+    ])
+  })
+
   test('the reference root is the session root, not a shell cd', async ($, on) => {
     const w = world(on)
     w.session.cwd = `${w.root}/sub`

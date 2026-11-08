@@ -212,6 +212,44 @@ function operands(args: Word[], withValue: Set<string>) {
   return out
 }
 
+const basename = (path: string) => path.replace(/\/+$/, '').split('/').pop() ?? ''
+
+function copyTargets(args: Word[], withValue: Set<string>, isMove: boolean): Word[] {
+  let dir: Word | null = null
+  let isNoDir = false
+  const rest: Word[] = []
+  for (let j = 0; j < args.length; j++) {
+    const arg = args[j] as Word
+    if (arg.text === '-t' || arg.text === '--target-directory') {
+      dir = args[++j] ?? null
+      continue
+    }
+    if (arg.text.startsWith('--target-directory=')) {
+      dir = { ...arg, text: arg.text.slice('--target-directory='.length) }
+      continue
+    }
+    if (arg.text === '-T' || arg.text === '--no-target-directory') isNoDir = true
+    rest.push(arg)
+  }
+  const list = operands(rest, withValue)
+  const into = (dest: Word, sources: Word[]) =>
+    sources
+      .filter(source => !['', '.', '..'].includes(basename(source.text)))
+      .map(source => ({
+        text: `${dest.text.replace(/\/+$/, '')}/${basename(source.text)}`,
+        isDynamic: dest.isDynamic || source.isDynamic,
+      }))
+  if (dir !== null) return [...into(dir, list), ...(isMove ? list : [])]
+  if (list.length < 2) return []
+  const dest = list[list.length - 1] as Word
+  const sources = list.slice(0, -1)
+  return [
+    ...(isNoDir ? [] : into(dest, sources)),
+    ...(dest.text.endsWith('/') ? [] : [dest]),
+    ...(isMove ? sources : []),
+  ]
+}
+
 function inPlaceTargets(args: Word[], isSed: boolean) {
   let isInPlace = false
   let hasScriptOption = false
@@ -269,14 +307,10 @@ function targetsOf(words: Word[]): Word[] {
       return inPlaceTargets(args, false)
     case 'cp':
     case 'install':
-    case 'ln': {
-      const list = operands(args, new Set(['-t', '-S', '-m', '-o', '-g', '--target-directory', '--suffix']))
-      return list.length >= 2 ? [list[list.length - 1] as Word] : []
-    }
-    case 'mv': {
-      const list = operands(args, new Set(['-t', '-S', '--target-directory', '--suffix']))
-      return list.length >= 2 ? list : []
-    }
+    case 'ln':
+      return copyTargets(args, new Set(['-S', '-m', '-o', '-g', '--suffix']), false)
+    case 'mv':
+      return copyTargets(args, new Set(['-S', '--suffix']), true)
     case 'rm':
     case 'unlink':
     case 'shred':
