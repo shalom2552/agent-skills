@@ -65,3 +65,7 @@ Small JSON files that `./install` merges into the scope's `settings.json`. An en
 | --- | --- |
 | `tmux-truecolor` | Truecolor inside tmux, so mod hex colors render right. |
 
+
+## Global CLAUDE.md
+
+`CLAUDE.global.md` is my global `~/.claude/CLAUDE.md`. Not installed; copy it by hand.
