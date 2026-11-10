@@ -24,6 +24,7 @@ To update, run `./install -u`. It pulls the checkout and refreshes what is alrea
 | `to-prompt` | Write a handoff prompt for a fresh agent. |
 | `visualize` | Turn any subject into a visual HTML page. |
 | `walk-with-me` | Learn languages and idioms by coding with a coach. |
+| `wiki` | Set up and lint an agent wiki. |
 
 ## Mods
 
