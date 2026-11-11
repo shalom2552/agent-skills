@@ -11,18 +11,20 @@ import {
   keptSessionsOf,
   partsOf,
   pillWidthOf,
+  savedOf,
   secondsOf,
+  spanOf,
   statsOf,
-  storedTurnsOf,
+  sumOf,
   tokensOf,
   unionMs,
 } from '../hooks/register'
 import { textOf } from './text-of'
 
-const LINE = (durationMs: number, columns = 120): RenderInput<'TurnDuration'> => ({
+const LINE = (durationMs: number, columns = 120, requestId = 'line'): RenderInput<'TurnDuration'> => ({
   component: 'TurnDuration',
   surface: 'terminal',
-  requestId: 'line',
+  requestId,
   viewport: { columns, rows: 40 },
   props: { word: 'Baked', durationMs },
 })
@@ -273,7 +275,7 @@ describe('register', () => {
     world(on, [[[text('hi'), 1_000]]], { store })
     await finish($, USAGE)
 
-    expect(storedTurnsOf(store.get('turns:s1')).map(t => t.tokens?.output)).toEqual([1_800])
+    expect(savedOf(store.get('turns:s1')).turns.map(t => t.tokens?.output)).toEqual([1_800])
     expect(store.get('sessions')).toEqual(['s1'])
   })
 
@@ -300,7 +302,7 @@ describe('register', () => {
     world(on, [[[text('hi'), 1_000]]], { store })
     await finish($, USAGE)
 
-    expect(storedTurnsOf(store.get('turns:s1')).map(t => t.durationMs)).toEqual([9_000, 1_000])
+    expect(savedOf(store.get('turns:s1')).turns.map(t => t.durationMs)).toEqual([9_000, 1_000])
   })
 
   test('the oldest sessions are evicted', async ($, on) => {
@@ -333,11 +335,94 @@ describe('register', () => {
   })
 
   test('stored data is read defensively', () => {
-    expect(storedTurnsOf({ version: 2, turns: [TURN] })).toEqual([TURN])
-    expect(storedTurnsOf({ version: 1, turns: [TURN] })).toEqual([])
-    expect(storedTurnsOf('junk')).toEqual([])
-    expect(storedTurnsOf(undefined)).toEqual([])
+    expect(savedOf({ version: 3, turns: [TURN], rows: { r: TURN } })).toEqual({ turns: [TURN], rows: { r: TURN } })
+    expect(savedOf({ version: 3, turns: [TURN], rows: [TURN] })).toEqual({ turns: [TURN], rows: {} })
+    expect(savedOf({ version: 2, turns: [TURN], rows: { r: TURN } })).toEqual({ turns: [TURN], rows: {} })
+    expect(savedOf({ version: 1, turns: [TURN] })).toEqual({ turns: [], rows: {} })
+    expect(savedOf('junk')).toEqual({ turns: [], rows: {} })
+    expect(savedOf(undefined)).toEqual({ turns: [], rows: {} })
     expect(keptSessionsOf(['a', 'b', 7, 'c'], 'b')).toEqual(['a', 'c', 'b'])
     expect(keptSessionsOf(undefined, 'a')).toEqual(['a'])
+  })
+
+  test('a subagent starting mid-turn keeps the main turn', async ($, on) => {
+    world(on, [[[thinking('hmm'), 3_000]]])
+    await $.turn.start({ text: 'go', turnId: 't' })
+    await drain($.turn.step(STEP(0)))
+    await $.turn.start({ text: 'review', turnId: 'u', agentId: 'sub' })
+    await $.turn.complete({ answer: '', durationMs: 3_000, isAborted: false, turnId: 't', reason: 'answer' })
+
+    expect(textOf(await $.ui.render(LINE(3_000)))).toContain(' 3s')
+  })
+
+  const spanWorld = async ($: Parameters<TestBody>[0], on: On) => {
+    const store = new Map<string, unknown>()
+    const clock = world(on, [[[thinking('hmm'), 3_000]], [[text('hi'), 2_000]]], { store })
+    await $.turn.start({ text: 'go', turnId: 'a' })
+    await drain($.turn.step(STEP(0)))
+    await $.turn.complete({ answer: '', durationMs: 3_000, isAborted: false, turnId: 'a', reason: 'answer', usage: USAGE })
+    await clock.advance(10_000)
+    await $.turn.start({ text: '', turnId: 'b' })
+    await drain($.turn.step(STEP(1)))
+    return { clock, store }
+  }
+
+  const finishB = ($: Parameters<TestBody>[0]) =>
+    $.turn.complete({ answer: 'hi', durationMs: 2_000, isAborted: false, turnId: 'b', reason: 'answer', usage: USAGE })
+
+  test('a line spanning turns sums them and shows the wait', async ($, on) => {
+    await spanWorld($, on)
+    await finishB($)
+
+    const line = textOf(await $.ui.render(LINE(15_000, 120, 'span')))
+    expect(line).toContain('15s')
+    expect(line).toContain(' 5s')
+    expect(line).toContain(' 10s')
+    expect(line).toContain('↑4k ↓3.6k')
+  })
+
+  test('a line drawn mid-turn waits for the turn, then spans from first sight', async ($, on) => {
+    const { clock } = await spanWorld($, on)
+
+    expect(textOf(await $.ui.render(LINE(15_000, 120, 'span')))).not.toContain('━')
+    await finishB($)
+    await clock.advance(5_000)
+    const line = textOf(await $.ui.render(LINE(15_000, 120, 'span')))
+    expect(line).toContain(' 10s')
+    expect(line).toContain(' 5s')
+  })
+
+  test('a spanning line is saved and drawn after a resume', async ($, on) => {
+    const { store } = await spanWorld($, on)
+    await finishB($)
+    await $.ui.render(LINE(15_000, 120, 'span'))
+
+    expect(savedOf(store.get('turns:s1')).rows['span']?.other).toBe(10_000)
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
+    expect(textOf(await $.ui.render(LINE(15_000, 120, 'span')))).toContain(' 10s')
+  })
+
+  test('a stored row draws without its turns', async ($, on) => {
+    world(on, [], { store: new Map([['turns:s1', { version: 3, turns: [], rows: { span: TURN } }]]) })
+
+    expect(textOf(await $.ui.render(LINE(20_000, 120, 'span')))).toContain(' 3s')
+  })
+
+  test('a line whose start matches no turn draws the time pill alone', async ($, on) => {
+    await spanWorld($, on)
+    await finishB($)
+
+    const line = textOf(await $.ui.render(LINE(60_000, 120, 'old')))
+    expect(line).toContain('1m 0s')
+    expect(line).not.toContain('━')
+  })
+
+  test('spans anchor on the nearest turn start', () => {
+    const at = (startedAt: number, think: number): BeatTurn => ({ durationMs: think, think, tools: 0, write: 0, other: 0, startedAt })
+    const list = [at(0, 1_000), at(1_200, 2_000), at(9_000, 500)]
+    expect(spanOf(list, 9_800, 11_000)?.think).toBe(2_500)
+    expect(spanOf(list, 30_000, 11_000)).toBeUndefined()
+    expect(spanOf([{ ...TURN }], 9_000, 9_000)).toBeUndefined()
+    expect(sumOf([], 4_000)).toEqual({ durationMs: 4_000, think: 0, tools: 0, write: 0, other: 4_000 })
   })
 })

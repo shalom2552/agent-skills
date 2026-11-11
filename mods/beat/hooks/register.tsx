@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
-import type { BeatTokens, BeatTurn } from '../types'
+import type { BeatSaved, BeatTokens, BeatTurn } from '../types'
 
 const turns = atom({ plugin: 'beat', key: 'turns' } as const, [])
+const busy = atom({ plugin: 'beat', key: 'busy' } as const, false)
 
 const MAX_TURNS = 200
 const MAX_SESSIONS = 50
-const STORE_VERSION = 2
+const STORE_VERSION = 3
+const LEGACY_VERSION = 2
+const ANCHOR_MS = 1_500
 const SESSIONS_KEY = 'sessions'
 const TURNS_PREFIX = 'turns:'
 const BAR = 12
@@ -84,11 +87,64 @@ export const dropToFit = (keys: readonly string[], drops: readonly string[], wid
 
 const settled = <T,>(p: Promise<T>) => p.then(v => v, () => undefined)
 
-export const storedTurnsOf = (raw: unknown): BeatTurn[] => {
-  if (typeof raw !== 'object' || raw === null) return []
+export const savedOf = (raw: unknown): BeatSaved => {
+  if (typeof raw !== 'object' || raw === null) return { turns: [], rows: {} }
+  const version: unknown = Reflect.get(raw, 'version')
   const list: unknown = Reflect.get(raw, 'turns')
-  return Reflect.get(raw, 'version') === STORE_VERSION && Array.isArray(list) ? list : []
+  if ((version !== STORE_VERSION && version !== LEGACY_VERSION) || !Array.isArray(list)) return { turns: [], rows: {} }
+  const rows: unknown = Reflect.get(raw, 'rows')
+  const valid = version === STORE_VERSION && typeof rows === 'object' && rows !== null && !Array.isArray(rows)
+  return { turns: list, rows: valid ? Object.fromEntries(Object.entries(rows)) : {} }
 }
+
+export const sumOf = (span: readonly BeatTurn[], durationMs: number): BeatTurn => {
+  const add = (pick: (t: BeatTurn) => number) => span.reduce((a, t) => a + pick(t), 0)
+  const think = add(t => t.think)
+  const tools = add(t => t.tools)
+  const write = add(t => t.write)
+  const tokens = span.flatMap(t => t.tokens ?? [])
+  const costs = span.flatMap(t => t.costUsd ?? [])
+  const contextPercent = [...span].reverse().find(t => t.contextPercent !== undefined)?.contextPercent
+  return {
+    durationMs,
+    think,
+    tools,
+    write,
+    other: Math.max(0, durationMs - think - tools - write),
+    ...(tokens.length === 0
+      ? {}
+      : {
+          tokens: {
+            input: tokens.reduce((a, t) => a + t.input, 0),
+            output: tokens.reduce((a, t) => a + t.output, 0),
+            cacheRead: tokens.reduce((a, t) => a + t.cacheRead, 0),
+            cacheCreation: tokens.reduce((a, t) => a + t.cacheCreation, 0),
+          },
+        }),
+    ...(costs.length === 0 ? {} : { costUsd: costs.reduce((a, b) => a + b, 0) }),
+    ...(contextPercent === undefined ? {} : { contextPercent }),
+  }
+}
+
+export const spanOf = (list: readonly BeatTurn[], durationMs: number, seenAt: number) => {
+  const from = seenAt - durationMs
+  let first = -1
+  let best = ANCHOR_MS
+  list.forEach((t, i) => {
+    const gap = t.startedAt === undefined ? Infinity : Math.abs(t.startedAt - from)
+    if (gap <= best) {
+      best = gap
+      first = i
+    }
+  })
+  if (first === -1) return undefined
+  return sumOf(
+    list.slice(first).filter(t => t.startedAt !== undefined && t.startedAt < seenAt),
+    durationMs,
+  )
+}
+
+const lastOf = <T,>(rows: Record<string, T>, n: number) => Object.fromEntries(Object.entries(rows).slice(-n))
 
 export const keptSessionsOf = (raw: unknown, id: string) =>
   [...(Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s !== id) : []), id].slice(-MAX_SESSIONS)
@@ -101,13 +157,14 @@ const load = async <T,>($: Pick<EngineInterface, 'store'>, cache: Map<string, T>
   return value
 }
 
-const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, value: object) => {
+const persist = async ($: Pick<EngineInterface, 'store'>, prefix: string, id: string, latest: () => object | undefined) => {
   const kept = keptSessionsOf(await $.store.get(SESSIONS_KEY), id)
   for (const key of await $.store.keys()) {
     if (key.startsWith(prefix) && !kept.includes(key.slice(prefix.length))) await $.store.delete(key)
   }
   await $.store.set(SESSIONS_KEY, kept)
-  await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
+  const value = latest()
+  if (value !== undefined) await $.store.set(prefix + id, { version: STORE_VERSION, ...value })
 }
 
 export const unionMs = (spans: readonly (readonly [number, number])[]) => {
@@ -172,19 +229,25 @@ export const register: Register = on => {
   let think: [number, number][] = []
   let write: [number, number][] = []
   let tools: [number, number][] = []
-  const stored = new Map<string, BeatTurn[]>()
+  const stored = new Map<string, BeatSaved>()
+  const seen = new Map<string, number>()
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear' || e.reason === 'resume') await update($, turns, () => [])
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await update($, turns, () => [])
+      await update($, busy, () => false)
+    }
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     turnStart = await $.clock.now()
     costStart = (await settled($.session.usage()))?.cost?.usd
     think = []
     write = []
     tools = []
+    await update($, busy, () => true)
     return next(e)
   })
 
@@ -231,25 +294,38 @@ export const register: Register = on => {
         ...(e.usage === undefined ? {} : { tokens: tokensOf(e.usage) }),
         ...(costStart === undefined || costEnd === undefined ? {} : { costUsd: Math.max(0, costEnd - costStart) }),
         ...(contextPercent === undefined ? {} : { contextPercent }),
+        startedAt: turnStart,
       }
-      await update($, turns, list => [...list, turn].slice(-MAX_TURNS))
       const id = await settled($.session.id())
       if (id !== undefined) {
-        const list = [...(await load($, stored, TURNS_PREFIX, id, storedTurnsOf)), turn].slice(-MAX_TURNS)
-        stored.set(id, list)
-        await settled(persist($, TURNS_PREFIX, id, { turns: list }))
+        const saved = await load($, stored, TURNS_PREFIX, id, savedOf)
+        stored.set(id, { ...saved, turns: [...saved.turns, turn].slice(-MAX_TURNS) })
       }
+      await update($, turns, list => [...list, turn].slice(-MAX_TURNS))
+      await update($, busy, () => false)
+      if (id !== undefined) await settled(persist($, TURNS_PREFIX, id, () => stored.get(id)))
     }
     return done
   })
 
   on('ui.render', { component: 'TurnDuration' }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    const match = (list: readonly BeatTurn[]) => [...list].reverse().find(t => t.durationMs === e.props.durationMs)
-    let hit = match(await read($, turns))
+    const { requestId } = e
+    const { durationMs } = e.props
+    const live = await read($, turns)
+    const waiting = await read($, busy)
+    const id = await settled($.session.id())
+    const saved = id === undefined ? undefined : await load($, stored, TURNS_PREFIX, id, savedOf)
+    const match = (list: readonly BeatTurn[]) => [...list].reverse().find(t => t.durationMs === durationMs)
+    let hit = saved?.rows[requestId] ?? match(live) ?? (saved === undefined ? undefined : match(saved.turns))
     if (hit === undefined) {
-      const id = await settled($.session.id())
-      if (id !== undefined) hit = match(await load($, stored, TURNS_PREFIX, id, storedTurnsOf))
+      const seenAt = seen.get(requestId) ?? (await $.clock.now())
+      seen.set(requestId, seenAt)
+      if (!waiting) hit = spanOf(saved?.turns ?? live, durationMs, seenAt)
+      if (hit !== undefined && id !== undefined && saved !== undefined) {
+        stored.set(id, { ...saved, rows: lastOf({ ...saved.rows, [requestId]: hit }, MAX_TURNS) })
+        await settled(persist($, TURNS_PREFIX, id, () => stored.get(id)))
+      }
     }
     const values = secondsOf(hit === undefined ? [0, 0, 0, 0] : [hit.think, hit.tools, hit.write, hit.other])
     const cells = cellsOf(values, BAR)
