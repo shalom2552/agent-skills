@@ -71,7 +71,7 @@ export const countdown = (at: number, now: number) => {
   if (secs <= 0) return undefined
   const mins = Math.floor(secs / 60)
   const hours = Math.floor(mins / 60)
-  return hours >= 48 ? `${Math.floor(hours / 24)}d` : hours >= 1 ? `${hours}h` : `${mins}m`
+  return hours >= 48 ? `${Math.floor(hours / 24)}d` : hours >= 1 ? `${hours}h${mins % 60}m` : `${mins}m`
 }
 
 export const heatOf = (tokens: number) => (tokens >= CTX_HOT ? RED : tokens >= CTX_WARN ? YELLOW : BLUE)

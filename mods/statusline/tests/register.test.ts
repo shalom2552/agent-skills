@@ -135,7 +135,7 @@ describe('register', () => {
     expect(row).toContain('$2.51')
     expect(row).toContain('123k')
     expect(row).toContain('12%')
-    expect(row).toContain('5h 72% ↻2h')
+    expect(row).toContain('5h 72% ↻2h18m')
     expect(row).toContain('engine hint')
   })
 
