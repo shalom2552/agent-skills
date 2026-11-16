@@ -129,7 +129,7 @@ const git = async ($: EngineInterface, cwd: string, args: string[]) => {
 const branchOf = async ($: EngineInterface, cwd: string) =>
   (await git($, cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])) ?? (await git($, cwd, ['rev-parse', '--short', 'HEAD']))
 
-let stepEffort: string | undefined
+let stepEffort: { model: string; level: string } | undefined
 let poll: Timer | undefined
 let refreshing: Promise<void> | undefined
 let isStale = false
@@ -208,7 +208,8 @@ async function refresh($: EngineInterface) {
     ...(l.resetsAt === undefined ? {} : { resetsAt: Date.parse(l.resetsAt) }),
   }))
   const perModel = model === undefined ? undefined : fieldOf(fieldOf(modelSettings, model), 'effortLevel')
-  const effort = [perModel, effortSetting, stepEffort].find(v => typeof v === 'string')
+  const live = stepEffort !== undefined && stepEffort.model === model ? stepEffort.level : undefined
+  const effort = [live, perModel, effortSetting].find(v => typeof v === 'string')
   const next: StatuslineSnap = {
     ...(model === undefined ? {} : { model }),
     ...(typeof effort === 'string' ? { effort } : {}),
@@ -239,7 +240,7 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     const done = yield* next(e)
     if (e.agentId === undefined && e.effort !== undefined) {
-      stepEffort = String(e.effort)
+      stepEffort = { model: e.model, level: String(e.effort) }
       await refreshSoon($)
     }
     return done

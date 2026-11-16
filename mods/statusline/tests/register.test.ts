@@ -1,4 +1,4 @@
-import type { On, RenderInput, SessionMessage, SessionUsage, Settings } from 'claude-code'
+import type { On, RenderInput, SessionMessage, SessionUsage, Settings, TurnStepInput } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { countdown, dropToFit, fieldOf, human, middle, patchLinesOf, storedDiffOf } from '../hooks/register'
@@ -28,12 +28,26 @@ type World = { usage?: SessionUsage; branch?: string; store?: Map<string, unknow
 
 const SETTINGS: Settings = { effortLevel: 'high', modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
 
+const STEP = (model: string, effort: TurnStepInput['effort'], agentId?: string): TurnStepInput => ({
+  turnId: 't',
+  index: 0,
+  model,
+  effort,
+  messageCount: 1,
+  ...(agentId === undefined ? {} : { agentId }),
+})
+
+async function drain(stream: AsyncIterable<unknown>) {
+  for await (const _ of stream) void _
+}
+
 function world(on: On, { usage = USAGE, branch = 'main', store = new Map(), messages = [], id = 's1', settings = SETTINGS, isDetached = false }: World = {}) {
   const clock = mock.clock(on, { now: 0 })
   const session = { id }
   const runs: string[][] = []
+  const model = { id: 'claude-opus-5-5' }
   on('session.cwd', () => ({ value: '/repo' }))
-  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.model', () => ({ value: model.id }))
   on('session.usage', () => ({ value: usage }))
   on('session.id', () => ({ value: session.id }))
   on('session.messages', () => ({ value: messages }))
@@ -58,7 +72,10 @@ function world(on: On, { usage = USAGE, branch = 'main', store = new Map(), mess
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('tool.call', ($, e) => (e.tool === 'Read' ? { result: 'text', isReadOnly: true as const } : { result: e.tool === 'Write' ? CREATE : EDIT }))
   on('ui.render', { component: 'PromptHint' }, () => ({ type: 'Text', props: {}, children: ['engine hint'] }))
-  return { store, runs, clock, session }
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  return { store, runs, clock, session, model }
 }
 
 describe('register', () => {
@@ -66,7 +83,7 @@ describe('register', () => {
     expect(human(999)).toBe('999')
     expect(human(123_456)).toBe('123k')
     expect(human(2_500_000)).toBe('2M')
-    expect(countdown(2 * 3_600_000 + 18 * 60_000, 0)).toBe('2h')
+    expect(countdown(2 * 3_600_000 + 18 * 60_000, 0)).toBe('2h18m')
     expect(countdown(3 * 86_400_000 + 5 * 3_600_000, 0)).toBe('3d')
     expect(countdown(45 * 60_000, 0)).toBe('45m')
     expect(countdown(0, 1)).toBeUndefined()
@@ -90,22 +107,22 @@ describe('register', () => {
       const row = textOf(await $.ui.render(HINT(columns)))
       return marks.filter(mark => row.includes(mark))
     }
-    expect(await at(77)).toEqual(marks)
-    expect(await at(76)).toEqual(marks.slice(1))
-    expect(await at(70)).toEqual(marks.slice(2))
-    expect(await at(61)).toEqual(marks.slice(3))
-    expect(await at(54)).toEqual(marks.slice(4))
-    expect(await at(49)).toEqual(marks.slice(5))
-    expect(await at(32)).toEqual(marks.slice(6))
-    expect(await at(18)).toEqual(marks.slice(7))
+    expect(await at(80)).toEqual(marks)
+    expect(await at(79)).toEqual(marks.slice(1))
+    expect(await at(73)).toEqual(marks.slice(2))
+    expect(await at(64)).toEqual(marks.slice(3))
+    expect(await at(57)).toEqual(marks.slice(4))
+    expect(await at(52)).toEqual(marks.slice(5))
+    expect(await at(35)).toEqual(marks.slice(6))
+    expect(await at(21)).toEqual(marks.slice(7))
   })
 
   test('a long branch is cut in the middle before it drops', async ($, on) => {
     world(on, { branch: 'feat/improve-and-consistency' })
     await $.session.start(SESSION)
     await $.tool.call({ tool: 'Edit', file_path: '/t/a.txt', old_string: 'a', new_string: 'b' })
-    expect(textOf(await $.ui.render(HINT(101)))).toContain('feat/improve-and-consistency*')
-    const row = textOf(await $.ui.render(HINT(80)))
+    expect(textOf(await $.ui.render(HINT(104)))).toContain('feat/improve-and-consistency*')
+    const row = textOf(await $.ui.render(HINT(83)))
     expect(row).not.toContain('+1/-1')
     expect(row).toContain('feat/i…stency*')
     expect(row).toContain('medium')
@@ -211,6 +228,22 @@ describe('register', () => {
     expect(row).toContain('claude-opus-5-5')
     expect(row).toContain('main*')
     expect(fieldOf('medium', 'effortLevel')).toBeUndefined()
+  })
+
+  test('the live effort beats saved settings for the model it ran on', async ($, on) => {
+    const { clock, model } = world(on)
+    await $.session.start(SESSION)
+    await drain($.turn.step(STEP('claude-opus-5-5', 'xhigh')))
+    await clock.advance(200)
+    expect(textOf(await $.ui.render(HINT()))).toContain('claude-opus-5-5 xhigh')
+
+    await drain($.turn.step(STEP('claude-opus-5-5', 'max', 'sub')))
+    await clock.advance(200)
+    expect(textOf(await $.ui.render(HINT()))).toContain('claude-opus-5-5 xhigh')
+
+    model.id = 'claude-sonnet-5-5'
+    await clock.advance(5_000)
+    expect(textOf(await $.ui.render(HINT()))).toContain('claude-sonnet-5-5 high')
   })
 
   test('clear resets the diff', async ($, on) => {
