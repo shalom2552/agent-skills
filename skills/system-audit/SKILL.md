@@ -16,7 +16,7 @@ Read the previous audit if there is one, treating its findings as leads to re-ch
 
 Identify the machine (package manager, init, root filesystem, bootloader, distro) and pick each check from what `command -v` confirms is installed.
 
-Seed TodoWrite with one item per step 2 area plus "write the doc", then extend it with what this machine's own configuration calls for: its filesystem, its graphics stack, whether it is a laptop, what it runs. The six areas are a fixed spine so audits stay comparable; the derived items are where the audit fits the machine.
+Seed the task list with one item per step 2 area plus "write the doc", then extend it with what this machine's own configuration calls for: its filesystem, its graphics stack, whether it is a laptop, what it runs. The six areas are a fixed spine so audits stay comparable; the derived items are where the audit fits the machine.
 
 An area named in `$ARGUMENTS` goes deep, the rest stay quick passes.
 

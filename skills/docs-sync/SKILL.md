@@ -1,6 +1,6 @@
 ---
 name: docs-sync
-description: Find and fix drift between docs and code.
+description: Find and fix drift between docs and code. Use at the end of work that changed code the docs describe, or when the user asks whether the docs still match the code.
 argument-hint: "(optional) file or section to focus on, e.g. 'install section' or 'docs/API.md'"
 ---
 
@@ -16,7 +16,7 @@ The README is in scope every run. Widen to the other tracked markdown when `$ARG
 
 Where there is no README and none is named, offer to write one from the code. A declined offer ends the run.
 
-Seed TodoWrite with one item per step 2 area, plus "resolve findings".
+Seed the task list with one item per step 2 area, plus "resolve findings".
 
 Done when every doc in scope has a todo and the areas are on the list.
 

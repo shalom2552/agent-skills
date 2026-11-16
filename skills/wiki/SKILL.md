@@ -16,7 +16,7 @@ The project root is the git toplevel, else the current directory. A wiki exists 
 1. **Survey.** Classify every top-level entry of the root, and note:
    - agent files: `AGENTS.md`, `CLAUDE.md`, and whether `CLAUDE.md` imports `@AGENTS.md`
    - an existing wiki, or notes or memory folders with an index of their own
-   - domain docs: `CONTEXT.md`, `CONTEXT-MAP.md`, `docs/adr/`
+   - domain docs: `GLOSSARY.md`, `GLOSSARY-MAP.md`, `CONTEXT.md`, `CONTEXT-MAP.md`, `docs/adr/`
    - sources of truth: README, docs, specs, build and config files, data folders, git history
 
    Done when every top-level entry has a class.
