@@ -1,0 +1,27 @@
+#!/bin/sh
+# Maintainer check: SKILL.md, BLOCKS.md, the kit, the showcase and check agree.
+set -eu
+kit=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+cd "$kit"
+status=0
+
+for name in $(sed -n 's/^  B\.\([a-z]*\) = .*/\1/p' kit.js); do
+  [ "$name" = demo ] || [ "$name" = code ] || grep -q "^\`\`\`$name\( \|$\)" BLOCKS.md || { echo "selftest: block \"$name\" has no example in BLOCKS.md"; status=1; }
+done
+for name in $(sed -n 's/^  C\.\([a-z]*\) = .*/\1/p' kit.js); do
+  grep -q "^::: $name\( \|$\)" BLOCKS.md || { echo "selftest: container \"$name\" has no example in BLOCKS.md"; status=1; }
+done
+for name in $(sed -n 's/^```\([a-z][a-z0-9]*\).*/\1/p' BLOCKS.md | sort -u); do
+  grep -q "^  B\.$name = \|[ {]$name: '\|[' ]$name[ ']" kit.js || { echo "selftest: BLOCKS.md uses \"$name\", which kit.js does not know"; status=1; }
+done
+awk '/^```html$/ { on = 1; next } on && /^```$/ { exit } on' SKILL.md | cmp -s - template.html || { echo "selftest: the skeleton in SKILL.md differs from template.html"; status=1; }
+
+awk '
+  FNR == NR { if (/^## /) on = 1; if (on) body = body $0 "\n"; next }
+  /^# Title$/ { print "# Visualize kit"; print "> Every block the kit renders, each shown as the source you write and the result you get."; printf "%s", body; skip = 1; next }
+  /<title>/ { print "<title>Visualize kit</title>"; next }
+  /^<\/script>$/ { skip = 0 }
+  !skip
+' BLOCKS.md template.html > showcase.html
+./check showcase.html || status=$?
+exit "$status"

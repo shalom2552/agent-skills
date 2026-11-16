@@ -1,22 +1,38 @@
 #!/bin/sh
+# inline PAGE...: paste the kit into each page, or refresh a kit pasted earlier.
 set -eu
 kit=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ "$#" -gt 0 ] || { echo "usage: inline PAGE..." >&2; exit 2; }
+fonts='<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:ital,wght@0,100..900;1,100..900&family=Geist+Mono:wght@100..900&display=swap">
+<meta name="color-scheme" content="light dark">'
 status=0
 for page in "$@"; do
-  if ! grep -q 'href="kit\.css"' "$page" || ! grep -q 'src="kit\.js"' "$page"; then
-    echo "inline: no kit.css link or kit.js script tag in $page" >&2
-    status=1
-    continue
-  fi
   tmp=$(mktemp)
-  awk -v css="$kit/kit.css" -v js="$kit/kit.js" '
-    /<link[^>]*href="kit\.css"[^>]*>/ { print "<style>"; while ((getline l < css) > 0) print l; print "</style>"; next }
-    /<script[^>]*src="kit\.js"[^>]*><\/script>/ { print "<script>"; while ((getline l < js) > 0) print l; print "</script>"; next }
-    { print }
-  ' "$page" > "$tmp"
-  cat "$tmp" > "$page"
+  if FONTS=$fonts awk -v css="$kit/kit.css" -v js="$kit/kit.js" '
+    function put(tag, file,  l) { print "<" tag ">"; while ((getline l < file) > 0) print l; close(file); print "</" tag ">"; done++ }
+    BEGIN { getline c1 < css; close(css); getline j1 < js; close(js) }
+    function flush() { printf "%s", pend; pend = "" }
+    /<link[^>]*href="kit\.css"[^>]*>/ { flush(); print ENVIRON["FONTS"]; put("style", css); next }
+    /<script[^>]*src="kit\.js"[^>]*><\/script>/ { flush(); put("script", js); next }
+    /^<link rel="(preconnect|stylesheet)" href="https:\/\/fonts\.(googleapis|gstatic)\.com/ || $0 == "<meta name=\"color-scheme\" content=\"light dark\">" { pend = pend $0 "\n"; next }
+    $0 == "<style>" || $0 == "<script>" {
+      held = $0
+      if ((getline nxt) <= 0) { flush(); print held; next }
+      if (held == "<style>" && nxt == c1) { pend = ""; print ENVIRON["FONTS"]; while ((getline l) > 0 && l != "</style>"); put("style", css); next }
+      if (held == "<script>" && nxt == j1) { flush(); while ((getline l) > 0 && l != "</script>"); put("script", js); next }
+      flush(); print held; print nxt; next
+    }
+    { flush(); print }
+    END { flush(); exit done == 2 ? 0 : 1 }
+  ' "$page" > "$tmp"; then
+    cat "$tmp" > "$page"
+    echo "inlined $page"
+  else
+    echo "inline: $page needs both kit lines from the skeleton: the kit.css link and the kit.js script tag" >&2
+    status=1
+  fi
   rm -f "$tmp"
-  echo "inlined $page"
 done
 exit "$status"
