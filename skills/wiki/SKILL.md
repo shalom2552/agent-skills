@@ -40,24 +40,24 @@ The project root is the git toplevel, else the current directory. A wiki exists 
    | both, separate | append the section to `AGENTS.md`; add `@AGENTS.md` to `CLAUDE.md` |
    | an old wiki section | replace it; carry its project-specific rules to `rules.md` under "Project rules" |
 
-4. **Create the wiki.** Copy [templates/rules.md](templates/rules.md) verbatim. Write the index from [templates/index.md](templates/index.md): purpose, one Sources row per source of truth (pointer only), Pages rows. Write the log from [templates/log.md](templates/log.md).
+4. **Create the wiki.** Copy [templates/rules.md](templates/rules.md) verbatim. Write the index from [templates/index.md](templates/index.md): purpose, one Sources row per source of truth (pointer only), Pages rows, `Linted` set to today.
 
 5. **Seed.** Read the sources from the survey, the last 100 commit subjects when there is git history, and this conversation. Hold every candidate line to the test in `rules.md`, write it in its page type's format, create only pages that receive lines, and register each in the index. Lines the user stated get `(user)`. A new or empty project gets only what step 2 gave.
 
    Done when every source was read or deliberately skipped, and every written line was checked against its source.
 
-6. **Finish.** Add a `setup` log entry. Report: files created or changed with line counts, one line per seeded page, sources skipped and why.
+6. **Finish.** Report: files created or changed with line counts, one line per seeded page, sources skipped and why.
 
 ## lint
 
 1. Read the index and `rules.md`, and list the wiki folder.
 
-2. **Upgrade check.** Compare the `Rules version` line with [templates/rules.md](templates/rules.md). When the project's is older, show what changed and offer to replace everything above `## Project rules`, keeping that section. Log an accepted upgrade as `upgrade`.
+2. **Upgrade check.** Compare the `Rules version` line with [templates/rules.md](templates/rules.md). When the project's is older, show what changed and offer to replace everything above `## Project rules`, keeping that section. From 1.x, also delete the log page and the index's Kind column.
 
-3. **Check.** Run the checks under "Lint" in `rules.md` over every page, and confirm the agent files still carry the section with the right path and `CLAUDE.md` still imports `AGENTS.md`.
+3. **Check.** Run the checks under "Lint" in `rules.md` over every page. Confirm the agent files carry [templates/section.md](templates/section.md) as written, with the right path, and that `CLAUDE.md` still imports `AGENTS.md`. List any other instruction in the agent files or docs that tells agents what to write to the wiki, for the user to keep or drop.
 
-   Done when every line of every current page was compared against its source.
+   Done when every line in scope was compared against its source.
 
 4. **Resolve.** Fix untagged lines directly. Collect the rest for the user: `(user)` lines and decisions a source contradicts, pages to split or merge.
 
-5. **Finish.** Add a `lint` log entry. Report the fixes as page: change, then the list awaiting the user.
+5. **Finish.** Set `Linted` to today. Report the fixes as page: change, then the list awaiting the user.

@@ -4,4 +4,5 @@
 
 - At the start of each task, read `{{WIKI}}/index.md`, then only the pages its "Read when" column sends you to.
 - Before your first wiki write in a session, read `{{WIKI}}/rules.md`.
+- Most tasks write nothing: a request carried out lives in the code.
 - Where the wiki and a source disagree, trust the source.

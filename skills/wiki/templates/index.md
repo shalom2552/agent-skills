@@ -1,10 +1,10 @@
 # Wiki index
 
-_Kind: current. Cap: 60 lines._
+_Cap: 60 lines. Linted: {{DATE}}._
 
 {{PURPOSE}}
 
-Read the pages whose "Read when" matches your task, and only those. On history pages, list the headings first (`grep -n '^## ' <page>`) and read the entries you need. Lines orient you; before a change depends on one, confirm it in the source. Read [rules](rules.md) before writing.
+Read the pages whose "Read when" matches your task, and only those. On long pages, list the headings first (`grep -n '^## ' <page>`) and read the sections you need. Lines orient you; before a change depends on one, confirm it in the source. Read [rules](rules.md) before writing.
 
 ## Sources
 
@@ -13,9 +13,8 @@ Read the pages whose "Read when" matches your task, and only those. On history p
 
 ## Pages
 
-| Page | Kind | Read when |
-| --- | --- | --- |
-| [rules](rules.md) | current | before your first wiki write in a session |
-| [log](log.md) | history | you need what happened when |
+| Page | Read when |
+| --- | --- |
+| [rules](rules.md) | before your first wiki write in a session |
 
 ## Open
